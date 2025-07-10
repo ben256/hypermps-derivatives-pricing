@@ -1,0 +1,7 @@
+numpy~=2.0.2
+pandas
+scipy~=1.13.1
+cython
+tntorch==1.1.2
+matplotlib~=3.9.4
+tqdm~=4.67.1
