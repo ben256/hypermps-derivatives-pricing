@@ -10,121 +10,79 @@ logging.getLogger().setLevel(logging.INFO)
 
 
 def stress_test():
-    phi_tt_times = []
-    vhat_tt_times = []
-    online_tt_times = []
-    fourier_times = []
-    phi_samples = []
-    vhat_samples = []
-    tt_prices = []
-    fourier_prices = []
-    mean_tt_prices = []
-    std_tt_prices = []
-    rms_errors = []
-    abs_errors = []
-
     dimensions = list(range(1, 10))
-    etas = [0.5, 0.4, 0.4, 0.35, 0.3, 0.25, 0.3, 0.25, 0.2]
+    etas = [0.5, 0.4, 0.4, 0.3, 0.3, 0.2, 0.2, 0.2, 0.2]
     base_seed = 42
     n_samples = 10
     s0_range = (90, 120)
     vol_range = (0.15, 0.25)
 
-    phi_tt_params = {
-        'eps': 1e-3,
-        'rmax': 70,
-        'max_iter': 100,
-        'early_stopping_patience': 3,
-        'early_stopping_tolerance': 1e-4,
-        'return_info': True
-    }
-    vhat_tt_params = {
-        'eps': 1e-3,
-        'rmax': 50,
-        'max_iter': 100,
-        'early_stopping_patience': 3,
-        'early_stopping_tolerance': 1e-4,
-        'return_info': True
+    phi_tt_params = {'eps': 1e-3, 'rmax': 50, 'max_iter': 100, 'early_stopping_patience': 3, 'early_stopping_tolerance': 1e-4, 'return_info': True}
+    vhat_tt_params = {'eps': 1e-3, 'rmax': 50, 'max_iter': 100, 'early_stopping_patience': 3, 'early_stopping_tolerance': 1e-4, 'return_info': True}
+
+    results = {
+        'dimensions': dimensions,
+        'etas': etas[:len(dimensions)],
+        'phi_tt_times': [], 'vhat_tt_times': [], 'online_tt_times': [],
+        'fourier_times': [], 'phi_samples': [], 'vhat_samples': [],
+        'tt_prices': [], 'fourier_prices': [], 'mean_tt_prices': [],
+        'std_tt_prices': [], 'rms_errors': [], 'abs_errors': []
     }
 
     for i, (d, eta) in enumerate(zip(dimensions, etas)):
-
-        run_tt_prices = []
-        run_fourier_prices = []
+        run_phi_tt_times, run_vhat_tt_times, run_online_tt_times = [], [], []
+        run_fourier_times, run_phi_samples, run_vhat_samples = [], [], []
+        run_tt_prices, run_fourier_prices = [], []
 
         for j in range(n_samples):
+            logging.info(f'Running stress test for dimension {d}, sample {j+1}/{n_samples}.')
             pricer = BSFourierPricer(
-                d=dimensions[i],
-                T=1.0,
-                r=0.05,
-                K=100,
-                N=100,
-                eta=etas[i],
-                s0_range=s0_range,
-                vol_range=vol_range,
-                phi_tt_params=phi_tt_params,
-                vhat_tt_params=vhat_tt_params,
+                d=d, T=1.0, r=0.05, K=100, N=100, eta=eta,
+                s0_range=s0_range, vol_range=vol_range,
+                phi_tt_params=phi_tt_params, vhat_tt_params=vhat_tt_params,
                 random_state=base_seed + j,
             )
 
-            logging.info(f'Running stress test for dimension {d}, sample {j+1}/{n_samples}.')
-
-            # TT gen
             phi_tt_info, phi_tt_runtime = pricer.run_phi_tt_cross()
             vhat_tt_info, vhat_tt_runtime = pricer.run_vhat_tt_cross()
-
-            phi_tt_times.append(phi_tt_runtime)
-            vhat_tt_times.append(vhat_tt_runtime)
-
-            phi_samples.append(phi_tt_info['nsamples'])
-            vhat_samples.append(vhat_tt_info['nsamples'])
-
-            # Pricing
             tt_price, tt_runtime = pricer.price_from_tt()
+
+            run_phi_tt_times.append(phi_tt_runtime)
+            run_vhat_tt_times.append(vhat_tt_runtime)
+            run_online_tt_times.append(tt_runtime)
+            run_phi_samples.append(phi_tt_info['nsamples'])
+            run_vhat_samples.append(vhat_tt_info['nsamples'])
             run_tt_prices.append(tt_price)
 
             if d < 5:
                 f_price, f_runtime = pricer.price_from_fourier()
+                run_fourier_prices.append(f_price)
+                run_fourier_times.append(f_runtime)
             else:
-                f_runtime, f_price = None, None
+                run_fourier_prices.append(None)
+                run_fourier_times.append(None)
 
-            run_fourier_prices.append(f_price)
+        results['phi_tt_times'].append(run_phi_tt_times)
+        results['vhat_tt_times'].append(run_vhat_tt_times)
+        results['online_tt_times'].append(run_online_tt_times)
+        results['fourier_times'].append(run_fourier_times)
+        results['phi_samples'].append(run_phi_samples)
+        results['vhat_samples'].append(run_vhat_samples)
+        results['tt_prices'].append(run_tt_prices)
+        results['fourier_prices'].append(run_fourier_prices)
 
-            online_tt_times.append(tt_runtime)
-            fourier_times.append(f_runtime)
-
-        tt_prices.append(run_tt_prices)
-        fourier_prices.append(run_fourier_prices)
-
-        mean_tt_prices.append(np.mean(run_tt_prices))
-        std_tt_prices.append(np.std(run_tt_prices))
+        results['mean_tt_prices'].append(np.mean(run_tt_prices))
+        results['std_tt_prices'].append(np.std(run_tt_prices))
 
         if d < 5:
             errors = np.array(run_tt_prices) - np.array(run_fourier_prices)
-            rms_errors.append(np.sqrt(np.mean(errors**2)))
-            abs_errors.append(np.mean(np.abs(errors)))
+            results['rms_errors'].append(np.sqrt(np.mean(errors**2)))
+            results['abs_errors'].append(np.max(np.abs(errors)))
         else:
-            rms_errors.append(None)
-            abs_errors.append(None)
+            results['rms_errors'].append(None)
+            results['abs_errors'].append(None)
 
-    results = {
-        'dimensions': dimensions,
-        'etas': etas,
-        'phi_tt_times': phi_tt_times,
-        'vhat_tt_times': vhat_tt_times,
-        'online_tt_times': online_tt_times,
-        'fourier_times': fourier_times,
-        'phi_samples': phi_samples,
-        'vhat_samples': vhat_samples,
-        'tt_prices': tt_prices,
-        'fourier_prices': fourier_prices,
-        'mean_tt_prices': mean_tt_prices,
-        'std_tt_prices': std_tt_prices,
-        'rms_errors': rms_errors,
-        'abs_errors': abs_errors
-    }
-
-    with open('./output/stress_test_results3.json', 'w') as f:
+    with open('./output/stress_test_results.json', 'w') as f:
         json.dump(results, f, indent=4)
 
 
