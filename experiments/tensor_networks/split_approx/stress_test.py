@@ -12,8 +12,8 @@ logging.getLogger().setLevel(logging.INFO)
 def stress_test():
     dimensions = list(range(1, 10))
     etas = [0.5, 0.4, 0.4, 0.3, 0.3, 0.2, 0.2, 0.2, 0.2]
-    base_seed = 42
-    n_samples = 10
+    base_seed = 4242
+    n_samples = 50
     s0_range = (90, 120)
     vol_range = (0.15, 0.25)
 
@@ -82,7 +82,7 @@ def stress_test():
             results['rms_errors'].append(None)
             results['abs_errors'].append(None)
 
-    with open('./output/stress_test_results.json', 'w') as f:
+    with open('output/stress_test_results_50.json', 'w') as f:
         json.dump(results, f, indent=4)
 
 
