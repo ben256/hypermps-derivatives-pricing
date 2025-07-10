@@ -2,6 +2,9 @@ import numpy as np
 from typing import Optional, Tuple, Union
 
 import tntorch as tn
+import torch
+
+from utils.timer import function_timer
 
 
 class BSFourierPricer:
@@ -21,9 +24,9 @@ class BSFourierPricer:
             eta: float = 0.3,
             s0_range: Tuple[float, float] = (90.0, 120.0),
             vol_range: Tuple[float, float] = (0.15, 0.25),
-            random_state: Optional[int] = None,
             phi_tt_params: Optional[dict] = None,
             vhat_tt_params: Optional[dict] = None,
+            random_state: Optional[int] = None,
     ):
         self.d, self.T, self.r, self.K, self.N, self.eta = d, T, r, K, N, eta
         self.rng = np.random.default_rng(random_state)
@@ -75,35 +78,38 @@ class BSFourierPricer:
             Z[..., i] = omega.reshape(view_shape)
         return Z
 
+    def _initialise_parameters(self) -> None:
+        self.alpha = 5 / self.d
+        self.s0 = self.rng.uniform(90.0, 120.0, size=self.d)
+        self.vol = self.rng.uniform(0.15, 0.25, size=self.d)
+        self.corr_matrix = self._generate_correlation_matrix()
+
     def generate_grid(self) -> np.ndarray:
         j = np.arange(-self.N // 2, self.N // 2)
         omega = self.eta * j + 1j * self.alpha
         return self._make_Z(omega)
 
-    def adjust_dimensions(self, d: int) -> None:
-        if d <= 0:
-            raise ValueError("Dimension 'd' must be a positive integer.")
-        self.d = d
-        self.alpha = 5 / d
-        self.s0 = self.rng.uniform(90.0, 120.0, size=d)
-        self.vol = self.rng.uniform(0.15, 0.25, size=d)
-        self.corr_matrix = self._generate_correlation_matrix()
-        self._compute_parameters()
-
     def adjust_parameters(
             self,
+            d: Optional[int] = None,
             T: Optional[float] = None,
             r: Optional[float] = None,
             K: Optional[float] = None,
+            eta: Optional[float] = None,
             s0_range: Optional[Tuple[float, float]] = None,
             vol_range: Optional[Tuple[float, float]] = None,
     ) -> None:
+        if d is not None:
+            self.d = d
+            self._initialise_parameters()
         if T is not None:
             self.T = T
         if r is not None:
             self.r = r
         if K is not None:
             self.K = K
+        if eta is not None:
+            self.eta = eta
         if s0_range is not None:
             self.s0 = self.rng.uniform(*s0_range, size=self.d)
         if vol_range is not None:
@@ -111,7 +117,7 @@ class BSFourierPricer:
 
         self._compute_parameters()
 
-    def vhat_mc(z_grid, mu, Sigma, d, K, M=10000):
+    def compute_vhat_mc(z_grid, mu, Sigma, d, K, M=10000):
         X = np.random.multivariate_normal(mu, Sigma, size=M)
 
         S_T = np.exp(X)
@@ -127,45 +133,46 @@ class BSFourierPricer:
 
         return vhat_flat.reshape(original_shape[:-1])
 
-    def vhat_min_call_tt(self, z: np.ndarray) -> np.ndarray:
+    def compute_vhat_min_call_tt(self, z: np.ndarray) -> torch.tensor:
         s = np.sum(z, axis=0)
         numerator = -self.K**(1 + 1j * s)
         denominator = ((-1)**self.d) * (1 + 1j * s) * np.prod(1j * z, axis=0)
-        return numerator / denominator
+        return torch.from_numpy(numerator / denominator)  # annoying typing due to tntorch wanting a tensor
 
-    def vhat_min_call(self, z: np.ndarray) -> np.ndarray:
+    def compute_vhat_min_call(self, z: np.ndarray) -> np.ndarray:
         s = z.sum(axis=-1)
         numerator = -self.K**(1 + 1j * s)
         denominator = ((-1)**self.d) * (1 + 1j * s) * np.prod(1j * z, axis=-1)
-        return numerator / denominator
+        return numerator / denominator  # no typing issues as this approach doesn't use tt-cross
 
-    def phi_tt(self, z: np.ndarray) -> np.ndarray:
+    def compute_phi_tt(self, z: np.ndarray) -> torch.tensor:
         z_dot_mu = np.dot(self.mu, z)
         Sigma_z = self.Sigma @ z
         quad = np.sum(z * Sigma_z, axis=0)
-        return np.exp(1j * z_dot_mu - 0.5 * quad)
+        return torch.from_numpy(np.exp(1j * z_dot_mu - 0.5 * quad))  # annoying typing due to tntorch wanting a tensor
 
-    def phi(self, z: np.ndarray) -> np.ndarray:
+    def compute_phi(self, z: np.ndarray) -> np.ndarray:
         z_dot_mu = np.tensordot(z, self.mu, axes=([-1], [0]))
         Sigma_z = np.tensordot(z, self.Sigma, axes=([-1], [0]))
         quad = np.sum(z * Sigma_z, axis=-1)
-        return np.exp(1j * z_dot_mu - 0.5 * quad)
+        return np.exp(1j * z_dot_mu - 0.5 * quad)  # no typing issues as this approach doesn't use tt-cross
 
     def phi_entry(self, *indices: int) -> np.ndarray:
         j = np.array(indices) - self.N // 2
         z = self.eta * j + 1j * self.alpha
-        return self.phi_tt(-z)
+        return self.compute_phi_tt(-z)
 
     def vhat_entry(self, *indices: int) -> np.ndarray:
         j = np.array(indices) - self.N // 2
         z = self.eta * j + 1j * self.alpha
-        return self.vhat_min_call_tt(z)
+        return self.compute_vhat_min_call_tt(z)
 
     def joint_entry(self, *indices: int) -> np.ndarray:
         j = np.array(indices) - self.N // 2
         z = self.eta * j + 1j * self.alpha
-        return self.phi_tt(-z) * self.vhat_min_call_tt(z)
+        return self.compute_phi_tt(-z) * self.compute_vhat_min_call_tt(z)
 
+    @function_timer
     def run_phi_tt_cross(self):
         phi_tt, phi_info = tn.cross(
             function=self.phi_entry,
@@ -174,7 +181,9 @@ class BSFourierPricer:
         )
         self.phi_tt = phi_tt
         self.phi_tt_info = phi_info
+        return phi_info
 
+    @function_timer
     def run_vhat_tt_cross(self):
         vhat_tt, vhat_info = tn.cross(
             function=self.vhat_entry,
@@ -183,8 +192,12 @@ class BSFourierPricer:
         )
         self.vhat_tt = vhat_tt
         self.vhat_tt_info = vhat_info
+        return vhat_info
 
+    @function_timer
     def price_from_tt(self, return_imaginary: bool = False) -> Union[float, complex]:
+        if not (self.phi_tt and self.vhat_tt):
+            raise ValueError("TT representations for phi and vhat must be computed first.")
         price = np.exp(-self.r * self.T) * (self.eta**self.d) / (2 * np.pi)**self.d * np.dot(self.phi_tt, self.vhat_tt).sum()
 
         if return_imaginary:
@@ -192,10 +205,11 @@ class BSFourierPricer:
         else:
             return price.real.item()
 
-    def price(self, return_imaginary: bool = False) -> Union[float, complex]:
+    @function_timer
+    def price_from_fourier(self, return_imaginary: bool = False) -> Union[float, complex]:
         z = self.generate_grid()
 
-        integrand = self.phi(-z) * self.vhat_min_call(z)
+        integrand = self.compute_phi(-z) * self.compute_vhat_min_call(z)
         price = np.exp(-self.r * self.T) * (self.eta**self.d) / (2 * np.pi)**self.d * integrand.sum()
 
         if return_imaginary:
