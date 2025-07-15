@@ -5,7 +5,7 @@ from tqdm import tqdm
 
 
 def target_function(
-        x: float,
+        x: np.ndarray,
         mu: np.ndarray,
 ):
     """
@@ -70,5 +70,4 @@ for n in tqdm(range(n_samples)):
         tt_tensor,
     ))
 
-    # save the tensor and mu
 torch.save(data, f"output/tt_tensor.pt")
