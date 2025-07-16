@@ -82,6 +82,17 @@ class SharedDecoder(nn.Module):
             core_i = head(x_slice)  # [batch_size, n_i, r_i, r_{i+1}]
             core_i = core_i.permute(0, 2, 1, 3)  # [batch_size, r_i, n_i, r_{i+1}]
             cores.append(core_i)
+
+        # this is probably a bit simpler, maybe should have just done this to start...
+        # channel_start = 0
+        # num_cores = len(self.ranks) - 1
+        # cores = []
+        # for i in range(num_cores):
+        #     ri, rip1 = self.ranks[i], self.ranks[i+1]
+        #     xi = x[:, channel_start:channel_start+2, :ri, :rip1]
+        #     channel_start += 2
+        #     cores.append(xi.permute(0, 2, 1, 3))
+
         return cores
 
 
