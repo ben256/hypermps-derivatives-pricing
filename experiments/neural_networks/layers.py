@@ -67,4 +67,3 @@ class ConvTransposeLayer(nn.Module):
         x = self.batch_norm(x)
         x = self.relu(x)
         return x
-
