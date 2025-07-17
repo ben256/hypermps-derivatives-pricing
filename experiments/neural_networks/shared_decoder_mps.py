@@ -1,43 +1,6 @@
 import torch.nn as nn
 
-
-class FCLayer(nn.Module):
-    def __init__(
-            self,
-            input_size: int,
-            output_size: int,
-            dropout: float = 0.1,
-    ):
-        super().__init__()
-        self.fc = nn.Linear(input_size, output_size)
-        self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, x):
-        x = self.fc(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-        return x
-
-
-class CNNLayer(nn.Module):
-    def __init__(
-            self,
-            channel_size: int,
-            kernel_size: int,
-            padding: int,
-            dropout: float,
-    ):
-        super().__init__()
-        self.conv2d = nn.Conv2d(channel_size, channel_size, kernel_size=kernel_size, padding=padding)
-        self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, x):
-        x = self.conv2d(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-        return x
+from layers import ConvLayer, FCLayer
 
 
 class SharedDecoder(nn.Module):
@@ -58,8 +21,8 @@ class SharedDecoder(nn.Module):
 
         self.projection = nn.Linear(latent_size, channel_size * self.H * self.W)
 
-        self.cnn1 = CNNLayer(channel_size, kernel_size, padding, dropout)
-        self.cnn2 = CNNLayer(channel_size, kernel_size, padding, dropout)
+        self.cnn1 = ConvLayer(channel_size, kernel_size, padding, dropout)
+        self.cnn2 = ConvLayer(channel_size, kernel_size, padding, dropout)
 
         self.heads = nn.ModuleList([
             nn.Conv2d(channel_size, i, kernel_size=kernel_size, padding=padding) for i in ranks[:-1]

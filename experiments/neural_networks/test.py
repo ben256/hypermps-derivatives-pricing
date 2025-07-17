@@ -1,7 +1,8 @@
 import numpy as np
 import torch
 
-from shared_decoder_mps import NeuralMPS
+# from shared_decoder_mps import NeuralMPS
+from cnn_heads_architecture import NeuralMPS
 
 data = torch.load('output/mini_tt_tensor.pt', weights_only=False)  # same as output/tt_tensor.pt from create dataset, just truncated
 
