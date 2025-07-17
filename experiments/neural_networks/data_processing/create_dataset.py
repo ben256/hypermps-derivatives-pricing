@@ -46,6 +46,8 @@ N = 32
 domain = [2] * d
 x = np.linspace(-1, 1, N)
 
+train_size, val_size, test_size = 0.8, 0.1, 0.1
+
 data = []
 
 for n in tqdm(range(n_samples)):
@@ -64,9 +66,25 @@ for n in tqdm(range(n_samples)):
         verbose=False,
     )
 
+    mu = np.concatenate(mu)
+    mu = torch.from_numpy(mu).to(torch.float32)
+
+    test = np.array(tt_tensor.cores)
+
     data.append((
         mu,
-        tt_tensor,
+        tt_tensor.cores,
     ))
 
-torch.save(data, f"output/tt_tensor.pt")
+np.random.seed(initial_seed)
+np.random.shuffle(data)
+
+train_end = int(train_size * len(data))
+val_end = train_end + int(val_size * len(data))
+train_data = data[:train_end]
+val_data = data[train_end:val_end]
+test_data = data[val_end:]
+
+torch.save(train_data, '../data/datasets/train.pt')
+torch.save(val_data, '../data/datasets/val.pt')
+torch.save(test_data, '../data/datasets/test.pt')
