@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from layers import FCLayer, ConvTransposeLayer
+from model.layers import FCLayer, ConvTransposeLayer
 
 
 class CoreDecoder(nn.Module):
