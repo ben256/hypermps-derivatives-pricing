@@ -1,6 +1,7 @@
 import json
 import os
 import copy
+import argparse
 
 import torch
 from torch import optim, nn
@@ -54,7 +55,7 @@ class EarlyStopping:
 def train(
         batch_size: int = 200,
         learning_rate: int = 5e-6,
-        num_training_epochs: int = 50,
+        num_training_epochs: int = 20,
         early_stopping_patience: int = 5,
         early_stopping_delta: float = 0.0,
         early_stopping_offset: int = 5,
@@ -131,7 +132,7 @@ def train(
 
                 epoch_train_loss += loss.item()
 
-                if batch_idx % 1000 == 0:
+                if batch_idx % 10 == 0:
                     progress = 100. * (batch_idx + 1) / len(train_dataloader)
                     logger.info(
                         f"Train Epoch: {epoch} [{batch_idx + 1}/{len(train_dataloader)} batches ({progress:.2f}%)]\tLoss: {loss.item():.8f}"
@@ -185,6 +186,40 @@ def train(
     if early_stopping.best_model_state is not None:
         model.load_state_dict(early_stopping.best_model_state)
 
+    final_model_path = os.path.join(output_dir, 'best_model.pth')
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimiser.state_dict(),
+        'train_loss_history': train_loss_history,
+        'validation_loss_history': validation_loss_history,
+    }, final_model_path)
+
 
 if __name__ == '__main__':
-    train()
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('--batch-size', type=int, default=200)
+    parser.add_argument('--learning-rate', type=float, default=5e-6)
+    parser.add_argument('--num-training-epochs', type=int, default=20)
+    parser.add_argument('--early-stopping-patience', type=int, default=5)
+    parser.add_argument('--early-stopping-delta', type=float, default=0.0)
+    parser.add_argument('--early-stopping-offset', type=int, default=5)
+    parser.add_argument('--weight-decay', type=float, default=0.01)
+    parser.add_argument('--dropout', type=float, default=0.1)
+    parser.add_argument('--dataset-dir', type=str, default='../data/datasets')
+    parser.add_argument('--output-dir', type=str, default='../output')
+
+    args = parser.parse_args()
+
+    train(
+        batch_size=args.batch_size,
+        learning_rate=args.learning_rate,
+        num_training_epochs=args.num_training_epochs,
+        early_stopping_patience=args.early_stopping_patience,
+        early_stopping_delta=args.early_stopping_delta,
+        early_stopping_offset=args.early_stopping_offset,
+        weight_decay=args.weight_decay,
+        dropout=args.dropout,
+        dataset_dir=args.dataset_dir,
+        output_dir=args.output_dir,
+    )

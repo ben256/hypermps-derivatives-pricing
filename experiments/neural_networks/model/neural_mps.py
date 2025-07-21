@@ -179,4 +179,3 @@ class NeuralMPS(nn.Module):
         x = self.fc2(x)
         cores = self.cnn(x)
         return cores
-
