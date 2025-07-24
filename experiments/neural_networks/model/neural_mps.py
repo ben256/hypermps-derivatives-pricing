@@ -87,46 +87,41 @@ class SharedDecoder(nn.Module):
     def __init__(
             self,
             latent_size: int,
-            channel_size: int,
-            kernel_size: int,
-            padding: int,
             ranks: list[int],
+            n: int,
             dropout: float,
+            channel_size: int = 32,
     ):
         super().__init__()
         self.H = max(ranks)
         self.W = max(ranks)
-        self.channel_size = channel_size
         self.ranks = ranks
+        self.n = n
+        self.channel_size = channel_size
 
         self.projection = nn.Linear(latent_size, channel_size * self.H * self.W)
 
-        self.cnn1 = ConvLayer(channel_size, kernel_size, padding, dropout)
-        self.cnn2 = ConvLayer(channel_size, kernel_size, padding, dropout)
+        self.cnn1 = ConvLayer(channel_size, kernel_size=3, padding=1, dropout=dropout)
+        self.cnn2 = ConvLayer(channel_size, kernel_size=3, padding=1, dropout=dropout)
 
-        self.heads = nn.ModuleList([
-            nn.Conv2d(channel_size, i, kernel_size=kernel_size, padding=padding) for i in ranks[:-1]
-        ])
+        self.final_conv = nn.Conv2d(channel_size, self.n, kernel_size=3, padding=1)
 
     def forward(self, x):
-        """
-        x: [batch_size, latent_size (64 atm)]
-        """
         x = self.projection(x)
         x = x.view(-1, self.channel_size, self.H, self.W)
         x = self.cnn1(x)
         x = self.cnn2(x)
+        x = self.final_conv(x)  # [batch, n, H, W]
 
         cores = []
-        for i, head in enumerate(self.heads):
+        for i in range(len(self.ranks) - 1):
             r_i = self.ranks[i]
             r_ip1 = self.ranks[i+1]
-            x_slice = x[:, :, :r_i, :r_ip1]  # [batch_size, channel_size, r_i, r_{i+1}]
-            core_i = head(x_slice)  # [batch_size, n_i, r_i, r_{i+1}]
-            core_i = core_i.permute(0, 2, 1, 3)  # [batch_size, r_i, n_i, r_{i+1}]
+
+            core_i = x[:, :, :r_i, :r_ip1]  # [batch, n, r_i, r_{i+1}]
+            core_i = core_i.permute(0, 2, 1, 3)  # [batch, r_i, n, r_{i+1}]
             cores.append(core_i)
 
-        # this is probably a bit simpler, maybe should have just done this to start...
         # channel_start = 0
         # num_cores = len(self.ranks) - 1
         # cores = []
@@ -143,14 +138,11 @@ class NeuralMPS(nn.Module):
     def __init__(
             self,
             ranks: list[int],
-            n: int = 2,
+            n: int,
             hidden_size: int = 128,
             latent_size: int = 64,
-            input_size: int = 15,
-
+            input_size: int = 21,
             channel_size: int = 32,
-            kernel_size: int = 3,
-            padding: int = 1,
 
             num_layers: int = 2,
             dropout: float = 0.1,
@@ -164,10 +156,12 @@ class NeuralMPS(nn.Module):
         ])
         self.fc2 = FCLayer(hidden_size, latent_size, dropout)  # maybe don't need this
 
-        if decoder_type == 'split':
-            self.cnn = SharedDecoder(latent_size, channel_size, kernel_size, padding, ranks, dropout)
-        else:
+        if decoder_type == 'shared':
+            self.cnn = SharedDecoder(latent_size, ranks, n, dropout, channel_size)
+        elif decoder_type == 'split':
             self.cnn = SplitDecoder(latent_size, ranks, n, dropout)
+        else:
+            raise ValueError(f"Unsupported decoder_type: {decoder_type}")
 
     def forward(self, mu):
         """
