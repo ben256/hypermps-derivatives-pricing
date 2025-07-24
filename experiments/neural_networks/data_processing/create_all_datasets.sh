@@ -1,0 +1,4 @@
+python -m data_processing.create_dataset --n-samples 100000 --d 4 --max-rank 20 --dataset-path ./data/datasets/ --device cuda --correlation 0.1 --format TT
+python -m data_processing.create_dataset --n-samples 100000 --d 4 --max-rank 20 --dataset-path ./data/datasets/ --device cuda --correlation 0.5 --format TT
+python -m data_processing.create_dataset --n-samples 100000 --d 4 --max-rank 20 --dataset-path ./data/datasets/ --device cuda --correlation 0.1 --format QTT
+python -m data_processing.create_dataset --n-samples 100000 --d 4 --max-rank 20 --dataset-path ./data/datasets/ --device cuda --correlation 0.5 --format QTT
