@@ -32,19 +32,19 @@ class EarlyStopping:
         self.best_model_state = None
 
     def __call__(self, val_loss, model, epoch=None):
-        if self.best_loss is None:
-            self.best_loss = val_loss
-            self.best_model_state = copy.deepcopy(model.state_dict())
-            if self.verbose:
-                self.logger.info(f"Initial validation loss: {val_loss:.6f}. Saving model.")
-        elif val_loss < self.best_loss - self.delta:
-            self.best_loss = val_loss
-            self.best_model_state = copy.deepcopy(model.state_dict())
-            self.counter = 0
-            if self.verbose:
-                self.logger.info(f"Validation loss improved to {val_loss:.6f}. Saving model.")
-        else:
-            if epoch >= self.offset:
+        if epoch >= self.offset:
+            if self.best_loss is None:
+                self.best_loss = val_loss
+                self.best_model_state = copy.deepcopy(model.state_dict())
+                if self.verbose:
+                    self.logger.info(f"Initial validation loss: {val_loss:.6f}. Saving model.")
+            elif val_loss < self.best_loss - self.delta:
+                self.best_loss = val_loss
+                self.best_model_state = copy.deepcopy(model.state_dict())
+                self.counter = 0
+                if self.verbose:
+                    self.logger.info(f"Validation loss improved to {val_loss:.6f}. Saving model.")
+            else:
                 self.counter += 1
                 if self.verbose:
                     self.logger.info(f"No improvement in validation loss. Counter: {self.counter}/{self.patience}")
@@ -61,6 +61,7 @@ def train(
         early_stopping_offset: int = 5,
         weight_decay: float = 0.01,
         dropout: float = 0.1,
+        decoder_type: str = 'shared',
         dataset_dir: str = '../data/datasets',
         output_dir: str = '../output',
 ):
@@ -85,7 +86,8 @@ def train(
     model = NeuralMPS(
         ranks=dataset_ranks,
         n=n,
-        decoder_type='shared'
+        input_size=sample[0].shape[0],
+        decoder_type=decoder_type,
     )
     model.to(device)
 
@@ -109,6 +111,7 @@ def train(
     logger.info(f"Early stopping: Patience: {early_stopping_patience}, Delta: {early_stopping_delta}, Offset: {early_stopping_offset}")
     logger.info(f"Weight decay: {weight_decay}")
     logger.info(f"Dropout: {dropout}")
+    logger.info(f"Decoder type: {decoder_type}")
     logger.info(f"Dataset directory: {dataset_dir}")
     logger.info(f"Output directory: {output_dir}")
 
@@ -132,7 +135,7 @@ def train(
 
                 epoch_train_loss += loss.item()
 
-                if batch_idx % 10 == 0:
+                if batch_idx % 80 == 0:
                     progress = 100. * (batch_idx + 1) / len(train_dataloader)
                     logger.info(
                         f"Train Epoch: {epoch} [{batch_idx + 1}/{len(train_dataloader)} batches ({progress:.2f}%)]\tLoss: {loss.item():.8f}"
@@ -199,14 +202,15 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--batch-size', type=int, default=200)
-    parser.add_argument('--learning-rate', type=float, default=5e-6)
-    parser.add_argument('--num-training-epochs', type=int, default=20)
+    parser.add_argument('--learning-rate', type=float, default=5e-5)
+    parser.add_argument('--num-training-epochs', type=int, default=100)
     parser.add_argument('--early-stopping-patience', type=int, default=5)
-    parser.add_argument('--early-stopping-delta', type=float, default=0.0)
-    parser.add_argument('--early-stopping-offset', type=int, default=5)
+    parser.add_argument('--early-stopping-delta', type=float, default=0.0001)
+    parser.add_argument('--early-stopping-offset', type=int, default=10)
     parser.add_argument('--weight-decay', type=float, default=0.01)
     parser.add_argument('--dropout', type=float, default=0.1)
-    parser.add_argument('--dataset-dir', type=str, default='../data/datasets')
+    parser.add_argument('--decoder-type', type=str, choices=['shared', 'split'], default='split')
+    parser.add_argument('--dataset-dir', type=str, default='../data/datasets/TT_d4_corr0-3')
     parser.add_argument('--output-dir', type=str, default='../output')
 
     args = parser.parse_args()
@@ -220,6 +224,7 @@ if __name__ == '__main__':
         early_stopping_offset=args.early_stopping_offset,
         weight_decay=args.weight_decay,
         dropout=args.dropout,
+        decoder_type=args.decoder_type,
         dataset_dir=args.dataset_dir,
         output_dir=args.output_dir,
     )

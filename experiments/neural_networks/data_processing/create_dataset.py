@@ -1,4 +1,5 @@
 import argparse
+import os
 
 import numpy as np
 import tntorch as tn
@@ -6,52 +7,102 @@ import torch
 from tqdm import tqdm
 
 
+def generate_covariance_matrix(
+        rng: np.random.Generator,
+        d: int,
+        correlation: float = None,
+):
+    stds = rng.uniform(0.1, 1.0, size=d)
+    corr_matrix = np.full((d, d), correlation if correlation is not None else 0.0)
+    np.fill_diagonal(corr_matrix, 1.0)
+
+    try:
+        np.linalg.cholesky(corr_matrix)
+    except np.linalg.LinAlgError:
+        eigenvalues, eigenvectors = np.linalg.eigh(corr_matrix)
+        eigenvalues[eigenvalues < 0] = 0
+        corr_matrix = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
+
+    S = np.diag(stds)
+    cov_matrix = S @ corr_matrix @ S
+    return cov_matrix
+
+
 def target_function(
         x: np.ndarray,
-        mu: np.ndarray,
+        A: float,
+        c: np.ndarray,
+        cov_matrix: np.ndarray
 ):
-    """
-    Target function:
-    $f(x | \mu) = \sum^{K}_{k=1} A_k \exp \left(- \frac{(x-c_k)^2}{2 \sigma^2_k} \right)$
-    -> sum of K Gaussian functions, parameterised by $\mu$
-    where $\mu = (A, c, \sigma)$ is a matrix shape (K, 3) with K being the number of components.
-    """
-    A, c, sigma = mu.T
-    A = A.reshape(-1, 1)
     c = c.reshape(-1, 1)
-    sigma = sigma.reshape(-1, 1)
+    cov_inv = np.linalg.inv(cov_matrix)
 
-    return np.sum(A * np.exp(-((x - c) ** 2) / (2 * sigma ** 2)), axis=0)
+    diff = x - c
+    exponent_term = -0.5 * np.einsum('ib,ij,jb->b', diff, cov_inv, diff)
+
+    return torch.from_numpy(A * np.exp(exponent_term))
 
 
-def function_wrapper(*ix, mu):
-    x_idx = 0
-    for i in range(len(ix)):
-        x_idx += ix[i] * (2**i)
+def function_wrapper(*ix, A, c, cov_matrix, N, type, device):
+    if type == 'TT':
+        d = len(ix)
+        x_vector = []
+        for i in range(d):
+            indices = ix[i].cpu().numpy() if isinstance(ix[i], torch.Tensor) else ix[i]
+            indices = indices.astype(int)
+            x_vector.append(np.take(np.linspace(-1, 1, N), indices))
+        out = target_function(np.stack(x_vector), A, c, cov_matrix)
 
-    N = 2**len(ix)
-    x_coord = np.take(np.linspace(-1, 1, N), x_idx)
+    elif type == 'QTT':
+        d = len(c)
+        k = int(np.log2(N))
+        x_vector = []
+        for i in range(d):
+            bits = ix[i * k : (i + 1) * k]
+            bits_arr = [
+                b.cpu().numpy().astype(int) if isinstance(b, torch.Tensor)
+                else np.array(b, dtype=int)
+                for b in bits
+            ]
+            idx = np.zeros_like(bits_arr[0], dtype=int)
+            for j, bit in enumerate(bits_arr):
+                idx += bit << (k - 1 - j)
+            x_vector.append(np.linspace(-1, 1, N)[idx])
+        out = target_function(np.stack(x_vector), A, c, cov_matrix)
 
-    return torch.from_numpy(target_function(x_coord, mu))
+    else:
+        raise ValueError(f"Unsupported type: {type}")
+
+    return out.to(device)
 
 
 def create_datasets(
         n_samples: int,
+        d: int,
+        max_rank: int,
         dataset_path: str,
+        correlation: float,
+        format: str,
+        device: str,
 ):
-
+    device = torch.device(device)
     initial_seed = 42
-    k = 5
     A_range = [0.2, 1.0]
-    c_range = [-0.8, 0.8]
-    sigma_range = [0.05, 0.3]
-    low_bounds = [A_range[0], c_range[0], sigma_range[0]]
-    high_bounds = [A_range[1], c_range[1], sigma_range[1]]
+    c_range = [-0.5, 0.5]
 
-    d = 5
-    N = 32
-    domain = [2] * d
-    x = np.linspace(-1, 1, N)
+    if format == 'TT':
+        N = 32
+        domain = [torch.arange(N, device=device) for _ in range(d)]
+        ranks = [max_rank] * (d - 1)
+
+    elif format == 'QTT':
+        N = 32
+        k = int(np.log2(N))
+        domain = [torch.arange(2, device=device) for _ in range(d * k)]
+        ranks = [max_rank] * (d * k - 1)
+
+    else:
+        raise ValueError(f"Unsupported format: {format}. Supported formats are 'TT' and 'QTT'.")
 
     train_size, val_size, test_size = 0.8, 0.1, 0.1
 
@@ -60,24 +111,28 @@ def create_datasets(
     for n in tqdm(range(n_samples)):
         seed = initial_seed + n
         rng = np.random.default_rng(seed)
-        mu = rng.uniform(low=low_bounds, high=high_bounds, size=(k, 3))
+        A = rng.uniform(low=A_range[0], high=A_range[1])
+        c = rng.uniform(low=c_range[0], high=c_range[1], size=d)
+        cov_matrix = generate_covariance_matrix(rng, d, correlation=correlation)
 
         tt_tensor= tn.cross(
-            function=lambda *ix: function_wrapper(*ix, mu=mu),
+            function=lambda *ix: function_wrapper(*ix, A=A, c=c, cov_matrix=cov_matrix, N=N, type=format, device=device),
             domain=domain,
-            eps=1e-14,
-            ranks_tt=[2, 4, 4, 2],
-            max_iter=50,
-            # early_stopping_patience=5,
-            # early_stopping_tolerance=1e-7,
+            eps=1e-7,
+            ranks_tt=ranks,
+            max_iter=100,
+            early_stopping_patience=3,
+            early_stopping_tolerance=1e-8,
             verbose=False,
+            suppress_warnings=True,
+            device=device,
         )
 
-        mu = np.concatenate(mu)
-        mu = torch.from_numpy(mu).to(torch.float32)
+        params = np.concatenate([[A], c, cov_matrix.flatten()])
+        params = torch.from_numpy(params).to(torch.float32).to(device)
 
         data.append((
-            mu,
+            params,
             tt_tensor.cores,
         ))
 
@@ -90,19 +145,33 @@ def create_datasets(
     val_data = data[train_end:val_end]
     test_data = data[val_end:]
 
-    torch.save(train_data, f'{dataset_path}/train.pt')
-    torch.save(val_data, f'{dataset_path}/val.pt')
-    torch.save(test_data, f'{dataset_path}/test.pt')
+    dataset_folder = f'{format}_d{d}_corr{str(correlation).replace(".", "-")}'
+    os.makedirs(f'{dataset_path}/{dataset_folder}', exist_ok=True)
+
+    torch.save(train_data, f'{dataset_path}/{dataset_folder}/train.pt')
+    torch.save(val_data, f'{dataset_path}/{dataset_folder}/val.pt')
+    torch.save(test_data, f'{dataset_path}/{dataset_folder}/test.pt')
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--n_samples', type=int, default=1e5)
-    parser.add_argument('--dataset_path', type=str, default='/cs/student/projects3/cf/2024/bnaylor/dev/hypermps-derivatives-pricing/experiments/neural_networks/data/datasets')
+    parser.add_argument('--n-samples', type=int, default=100000)
+    parser.add_argument('--d', type=int, default=4)
+    parser.add_argument('--max-rank', type=int, default=20)
+    # parser.add_argument('--dataset-path', type=str, default='/cs/student/projects3/cf/2024/bnaylor/dev/hypermps-derivatives-pricing/experiments/neural_networks/data/datasets')
+    parser.add_argument('--dataset-path', type=str, default='../data/datasets')
+    parser.add_argument('--correlation', type=float, default=0.3)
+    parser.add_argument('--format', type=str, choices=['TT', 'QTT'], default='TT')
+    parser.add_argument('--device', type=str, default='cpu')
     args = parser.parse_args()
 
     create_datasets(
-        args.n_samples,
-        args.dataset_path
+        n_samples=args.n_samples,
+        d=args.d,
+        max_rank=args.max_rank,
+        dataset_path=args.dataset_path,
+        correlation=args.correlation,
+        format=args.format,
+        device=args.device,
     )
