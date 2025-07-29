@@ -71,7 +71,7 @@ def train(
 
     torch.manual_seed(42)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    logger.info(f"Using device: {device}")
+    logger.info(f"Using device: {device}{device.index if device.type == 'cuda' else ''}")
 
     train_dataset = TTDataset(torch.load(f'{dataset_dir}/train.pt'))
     val_dataset = TTDataset(torch.load(f'{dataset_dir}/val.pt'))
