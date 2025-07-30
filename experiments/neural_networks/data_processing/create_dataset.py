@@ -114,6 +114,8 @@ def create_datasets(
         A = rng.uniform(low=A_range[0], high=A_range[1])
         c = rng.uniform(low=c_range[0], high=c_range[1], size=d)
         cov_matrix = generate_covariance_matrix(rng, d, correlation=correlation)
+        cov_triu = np.triu(cov_matrix).flatten()
+        cov_triu_input = cov_triu[cov_triu != 0.0]
 
         tt_tensor= tn.cross(
             function=lambda *ix: function_wrapper(*ix, A=A, c=c, cov_matrix=cov_matrix, N=N, type=format, device=device),
@@ -128,7 +130,7 @@ def create_datasets(
             device=device,
         )
 
-        params = np.concatenate([[A], c, cov_matrix.flatten()])
+        params = np.concatenate([[A], c, cov_triu.flatten()])
         params = torch.from_numpy(params).to(torch.float32).to(device)
 
         data.append((

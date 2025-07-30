@@ -5,11 +5,10 @@ import os
 import sys
 
 
-def setup_logging(log_dir='../logs', log_file='training.log'):
+def setup_logging(log_dir='../logs', log_file='training.log', save_to_file=True):
     """
     Log to both console and file.
     """
-    os.makedirs(log_dir, exist_ok=True)
 
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
@@ -19,13 +18,14 @@ def setup_logging(log_dir='../logs', log_file='training.log'):
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     console_handler.setLevel(logging.INFO)
-
-    file_handler = logging.FileHandler(os.path.join(log_dir, log_file))
-    file_handler.setFormatter(formatter)
-    file_handler.setLevel(logging.INFO)
-
     logger.addHandler(console_handler)
-    logger.addHandler(file_handler)
+
+    if save_to_file:
+        os.makedirs(log_dir, exist_ok=True)
+        file_handler = logging.FileHandler(os.path.join(log_dir, log_file))
+        file_handler.setFormatter(formatter)
+        file_handler.setLevel(logging.INFO)
+        logger.addHandler(file_handler)
 
     return logger
 
