@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 
 from data_processing.dataset import TTDataset
 from model.neural_mps import NeuralMPS
-from train_test.utils import setup_logging
+from train.utils import setup_logging
 
 
 def generate_covariance_matrix(
@@ -47,38 +47,25 @@ def target_function(
     return torch.from_numpy(A * np.exp(exponent_term))
 
 
-def eval_tt2(tt_cores, idx):
-    v = tt_cores[0][0, idx[0], :]
-    for k in range(1, len(tt_cores)):
-        Gk_slice = tt_cores[k][:, idx[k], :]
-        v = v @ Gk_slice
-    return v.squeeze()
+def eval_tt(tt_cores, x_indices):
+    """Evaluates a TT at given indices."""
+    v = tt_cores[0][:, :, x_indices[0], :]
+    for i in range(1, len(tt_cores)):
+        v = v @ tt_cores[i][:, :, x_indices[i], :]
+    return v
 
 
-def eval_tt(
-        tt_cores: List[torch.Tensor],
-        domain: List[torch.Tensor]
-) -> torch.Tensor:
-    B = tt_cores[0].shape[0]
-    N = domain[0].shape[0]
-    device = domain[0].device
+def eval_btt(btt_cores, x_indices, N):
+    """Evaluates a BTT at given indices."""
+    k = int(np.log2(N))
+    binary_indices = []
+    for idx in x_indices:
+        binary_indices.extend([int(b) for b in bin(idx)[2:].zfill(k)])
 
-    result = torch.zeros(B, N, device=device)
-
-    for i in range(N):
-        idx = [int(domain[k][i].item()) for k in range(len(domain))]
-
-        G1 = tt_cores[0]
-        v  = G1[:, 0, idx[0], :]
-
-        for k in range(1, len(tt_cores)):
-            Gk = tt_cores[k]
-            slice_k = Gk[:, :, idx[k], :]
-            v = torch.einsum('bi,bij->bj', v, slice_k)
-
-        result[:, i] = v.view(B)
-
-    return result
+    v = btt_cores[0][:, :, binary_indices[0], :]
+    for i in range(1, len(btt_cores)):
+        v = v @ btt_cores[i][:, :, binary_indices[i], :]
+    return v
 
 
 def function_wrapper(*ix, A, c, cov_matrix, N):
@@ -96,7 +83,7 @@ def function_wrapper(*ix, A, c, cov_matrix, N):
 def plot(
         d: int = 4,
         max_rank: int = 20,
-        model_path: str = '../data/models/TT_d4_corr0-1_split',
+        model_path: str = '../data/output/training_0',
         dataset_path: str = '../data/datasets/TT_d4_corr0-1',
         base: str = '',
         device: str = 'cpu',
