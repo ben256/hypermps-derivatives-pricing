@@ -9,5 +9,5 @@ class TTDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        mu, cores = self.samples[idx]
-        return mu, cores
+        params, target = self.samples[idx]
+        return params, target
