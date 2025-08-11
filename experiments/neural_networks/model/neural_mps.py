@@ -10,16 +10,15 @@ class CoreDecoder(nn.Module):
             latent_size: int,
             core_dims: tuple,
             dropout: float,
-            feature_map_size: int = 64,
     ):
         super().__init__()
         self.r_i, self.n_i, self.r_ip1 = core_dims
-        self.feature_map_size = feature_map_size
+        self.latent_size = latent_size
 
-        self.fc = FCLayer(latent_size, self.feature_map_size, dropout=dropout)
+        self.fc = FCLayer(self.latent_size, self.latent_size, dropout=dropout)
 
         num_stages = int(np.ceil(np.log2(max(self.n_i, self.r_ip1))))
-        in_channels = self.feature_map_size
+        in_channels = self.latent_size
 
         self.deconv_layers = nn.ModuleList()
         for i in range(num_stages):
@@ -50,8 +49,8 @@ class CoreDecoder(nn.Module):
         """
         x: [batch_size, latent_size (64 atm)]
         """
-        x = self.fc(x)  # [batch_size, feature_map_size]
-        x = x.view(-1, self.feature_map_size, 1, 1)  # [batch_size, feature_map_size, 1, 1]
+        x = self.fc(x)  # [batch_size, latent_size]
+        x = x.view(-1, self.latent_size, 1, 1)  # [batch_size, latent_size, 1, 1]
 
         for layer in self.deconv_layers:
             x = layer(x)
@@ -163,13 +162,16 @@ class NeuralMPS(nn.Module):
         else:
             raise ValueError(f"Unsupported decoder_type: {decoder_type}")
 
-    def forward(self, mu):
+    def forward(self, params):
         """
-        mu: [batch_size, input_size (15 atm)]
+        params: [batch_size, input_size (15 atm)]
         """
-        x = self.fc1(mu)
+        x = self.fc1(params)
         for layer in self.hidden_layers:
             x = layer(x)
         x = self.fc2(x)
         cores = self.cnn(x)
         return cores
+
+    def predict(self, *args, **kwargs):
+        return self.forward(**kwargs)

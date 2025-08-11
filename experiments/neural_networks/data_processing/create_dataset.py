@@ -1,10 +1,13 @@
 import argparse
+import json
 import os
 
 import numpy as np
 import tntorch as tn
 import torch
 from tqdm import tqdm
+
+from train.utils import create_recursive_folder
 
 
 def generate_covariance_matrix(
@@ -53,7 +56,7 @@ def function_wrapper(*ix, A, c, cov_matrix, N, type, device):
             x_vector.append(np.take(np.linspace(-1, 1, N), indices))
         out = target_function(np.stack(x_vector), A, c, cov_matrix)
 
-    elif type == 'QTT':
+    elif type == 'BTT':  # Binary base
         d = len(c)
         k = int(np.log2(N))
         x_vector = []
@@ -79,27 +82,35 @@ def function_wrapper(*ix, A, c, cov_matrix, N, type, device):
 def create_datasets(
         n_samples: int,
         d: int,
+        N: int,
         max_rank: int,
         dataset_path: str,
         correlation: float,
         format: str,
+        initial_seed: int,
+        semi_supervised: bool,
         device: str,
 ):
     device = torch.device(device)
-    initial_seed = 42
     A_range = [0.2, 1.0]
     c_range = [-0.5, 0.5]
+    grid = np.linspace(-1, 1, N)
 
     if format == 'TT':
-        N = 32
         domain = [torch.arange(N, device=device) for _ in range(d)]
         ranks = [max_rank] * (d - 1)
 
-    elif format == 'QTT':
-        N = 32
+    elif format == 'BTT':
         k = int(np.log2(N))
         domain = [torch.arange(2, device=device) for _ in range(d * k)]
-        ranks = [max_rank] * (d * k - 1)
+        ranks = [1]
+        for i in range(d * k):
+            if len(ranks) < (d * k) // 2:
+                ranks.append(min(ranks[-1]*2, max_rank))
+            else:
+                ranks.append(min(ranks[-1]*2, max_rank))
+                break
+        ranks.extend(ranks[::-1][1:])
 
     else:
         raise ValueError(f"Unsupported format: {format}. Supported formats are 'TT' and 'QTT'.")
@@ -114,27 +125,50 @@ def create_datasets(
         A = rng.uniform(low=A_range[0], high=A_range[1])
         c = rng.uniform(low=c_range[0], high=c_range[1], size=d)
         cov_matrix = generate_covariance_matrix(rng, d, correlation=correlation)
+        cov_triu = np.triu(cov_matrix)
+        cov_triu_input = cov_triu[np.triu_indices(d)]
 
-        tt_tensor= tn.cross(
-            function=lambda *ix: function_wrapper(*ix, A=A, c=c, cov_matrix=cov_matrix, N=N, type=format, device=device),
-            domain=domain,
-            eps=1e-7,
-            ranks_tt=ranks,
-            max_iter=100,
-            early_stopping_patience=3,
-            early_stopping_tolerance=1e-8,
-            verbose=False,
-            suppress_warnings=True,
-            device=device,
-        )
-
-        params = np.concatenate([[A], c, cov_matrix.flatten()])
+        params = np.concatenate([[A], c, cov_triu_input])
         params = torch.from_numpy(params).to(torch.float32).to(device)
 
-        data.append((
-            params,
-            tt_tensor.cores,
-        ))
+        if semi_supervised:
+            target_function_output = target_function(
+                grid,
+                A=A,
+                c=c,
+                cov_matrix=cov_matrix
+            )
+            data.append((
+                params,
+                target_function_output.to(device)
+            ))
+
+        else:
+            tt_tensor= tn.cross(
+                function=lambda *ix: function_wrapper(
+                    *ix,
+                    A=A,
+                    c=c,
+                    cov_matrix=cov_matrix,
+                    N=N,
+                    type=format,
+                    device=device
+                ),
+                domain=domain,
+                eps=1e-7,
+                ranks_tt=ranks[1:-1],
+                max_iter=100,
+                early_stopping_patience=3,
+                early_stopping_tolerance=1e-8,
+                verbose=False,
+                suppress_warnings=True,
+                device=device,
+            )
+
+            data.append((
+                params,
+                tt_tensor.cores,
+            ))
 
     np.random.seed(initial_seed)
     np.random.shuffle(data)
@@ -145,12 +179,28 @@ def create_datasets(
     val_data = data[train_end:val_end]
     test_data = data[val_end:]
 
-    dataset_folder = f'{format}_d{d}_corr{str(correlation).replace(".", "-")}'
-    os.makedirs(f'{dataset_path}/{dataset_folder}', exist_ok=True)
+    dataset_folder = create_recursive_folder(dataset_path, 'dataset')
 
-    torch.save(train_data, f'{dataset_path}/{dataset_folder}/train.pt')
-    torch.save(val_data, f'{dataset_path}/{dataset_folder}/val.pt')
-    torch.save(test_data, f'{dataset_path}/{dataset_folder}/test.pt')
+    torch.save(train_data, f'{dataset_folder}/train.pt')
+    torch.save(val_data, f'{dataset_folder}/val.pt')
+    torch.save(test_data, f'{dataset_folder}/test.pt')
+
+    dataset_info = {
+        'format': format,
+        'd': d,
+        'max_rank': max_rank,
+        'n_samples': n_samples,
+        'correlation': correlation,
+        'N': N,
+        'train_size': train_size,
+        'val_size': val_size,
+        'test_size': test_size,
+        'initial_seed': initial_seed,
+        'semi_supervised': semi_supervised,
+        'input_size': d + (d * (d + 1)) // 2 + 1,  # A + c + cov_matrix
+    }
+    with open(f'{dataset_folder}/info.json', 'w') as f:
+        json.dump(dataset_info, f, indent=4)
 
 
 if __name__ == '__main__':
@@ -158,20 +208,25 @@ if __name__ == '__main__':
 
     parser.add_argument('--n-samples', type=int, default=100000)
     parser.add_argument('--d', type=int, default=4)
+    parser.add_argument('--N', type=int, default=64)
     parser.add_argument('--max-rank', type=int, default=20)
-    # parser.add_argument('--dataset-path', type=str, default='/cs/student/projects3/cf/2024/bnaylor/dev/hypermps-derivatives-pricing/experiments/neural_networks/data/datasets')
     parser.add_argument('--dataset-path', type=str, default='../data/datasets')
     parser.add_argument('--correlation', type=float, default=0.3)
-    parser.add_argument('--format', type=str, choices=['TT', 'QTT'], default='TT')
+    parser.add_argument('--format', type=str, choices=['TT', 'BTT'], default='BTT')
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--semi-supervised', type=bool, default=True)
     parser.add_argument('--device', type=str, default='cpu')
     args = parser.parse_args()
 
     create_datasets(
         n_samples=args.n_samples,
         d=args.d,
+        N=args.N,
         max_rank=args.max_rank,
         dataset_path=args.dataset_path,
         correlation=args.correlation,
         format=args.format,
+        initial_seed=args.seed,
+        semi_supervised=args.semi_supervised,
         device=args.device,
     )
