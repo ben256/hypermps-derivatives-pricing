@@ -131,26 +131,27 @@ def compare_cores(
     logger.info(f"Relative error (NN vs Ground Truth): {error_nn.item():.6f}")
     logger.info(f"Relative error (TT-Cross vs Ground Truth): {error_cross.item():.6f}")
 
-    fig, axes = plt.subplots(3, 1, figsize=(12, 18))
-    fig.suptitle('Comparison of TT Core Frobenius Norms')
-
-    def plot_core_norms(ax, tt, label):
-        core_norms = [torch.norm(core.squeeze()).item() for core in tt.cores]
-        ax.plot(core_norms, marker='o', linestyle='-', label=label)
-        ax.set_ylabel('Frobenius Norm')
-        ax.set_xlabel('Core Index')
-        ax.set_title(label)
-        ax.grid(True)
-
-    plot_core_norms(axes[0], ground_truth_tt, 'Ground Truth TT')
-    plot_core_norms(axes[1], nn_tt, 'Neural Network TT')
-    plot_core_norms(axes[2], cross_tt, 'TT-Cross TT')
-
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-    plot_path = f"{output_dir}/core_comparison.png"
-    plt.savefig(plot_path)
-    logger.info(f"Saved core comparison plot to {plot_path}")
-    plt.show()
+    # AI slop (not sure how useful the 'Frobenius' Norms between cores are):
+    # fig, axes = plt.subplots(3, 1, figsize=(12, 18))
+    # fig.suptitle('Comparison of TT Core Frobenius Norms')
+    #
+    # def plot_core_norms(ax, tt, label):
+    #     core_norms = [torch.norm(core.squeeze()).item() for core in tt.cores]
+    #     ax.plot(core_norms, marker='o', linestyle='-', label=label)
+    #     ax.set_ylabel('Frobenius Norm')
+    #     ax.set_xlabel('Core Index')
+    #     ax.set_title(label)
+    #     ax.grid(True)
+    #
+    # plot_core_norms(axes[0], ground_truth_tt, 'Ground Truth TT')
+    # plot_core_norms(axes[1], nn_tt, 'Neural Network TT')
+    # plot_core_norms(axes[2], cross_tt, 'TT-Cross TT')
+    #
+    # plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    # plot_path = f"{output_dir}/core_comparison.png"
+    # plt.savefig(plot_path)
+    # logger.info(f"Saved core comparison plot to {plot_path}")
+    # plt.show()
 
 
 if __name__ == '__main__':
