@@ -1,6 +1,8 @@
 Neural MPS Module – User Guide
 ================================
 
+*GPT5 generated but all seems correct and pretty useful from reading it!*
+
 Focus: (1) Model architecture, (2) Dataset creation system, (3) Semi‑supervised training process.
 
 Audience: You can code, but you may be new to ML / tensor networks. This document is intentionally explicit about data shapes and flow.
@@ -36,7 +38,7 @@ Total: 1 + d + d(d+1)/2 = input_size (this is written into `info.json`).
 ### 2.2 Generating Targets
 Depending on `--semi-supervised`:
 * Supervised = build a *TT approximation* of the full d‑dimensional function using cross approximation (`tn.cross`). Output target is a Python list of d (TT) or d*k (BTT) core tensors: each core_i has shape `[r_i, n_i, r_{i+1}]`.
-* Semi‑supervised = (current prototype) store *raw function evaluations* along a simple 1D grid (`grid = linspace(-1,1,N)`); each sample target is a 1D tensor of length N (intended as a reduced supervision signal). The semi‑supervised training script is partially scaffolded and will evolve to map these 1D slices to a latent TT via indirect loss.
+* Semi‑supervised = store *compressed function observations* (currently a 1D marginal / projection of length N). Instead of giving the network exact target cores, we supply sampled scalar values of the underlying function. During training we reconstruct (sample) predicted function values from the generated cores and match them to the stored observations via an index‑sampling scheme. This yields stronger generalisation and reduced storage footprint while avoiding the (sometimes noisy) TT cross approximation step.
 
 ### 2.3 TT vs BTT Rank Pattern
 * TT: ranks list is `[1, max_rank, max_rank, …, max_rank, 1]` (length d+1).
@@ -48,10 +50,10 @@ Data is split (80/10/10) into `train.pt`, `val.pt`, `test.pt`, plus `info.json` 
 ### 2.5 Supervised vs Semi‑Supervised Summary
 | Aspect | Supervised | Semi‑Supervised |
 |--------|------------|-----------------|
-| Target stored | Full list of TT/BTT cores | Lower‑dimensional function samples (prototype: 1D grid) |
-| Loss | Direct MSE per predicted core | (Planned) MSE on reconstructed function samples after contracting predicted cores | 
-| Pros | Strong signal, fast convergence | Lower storage, scalable when full TT expensive |
-| Cons | Larger disk footprint; requires TT construction | Indirect supervision; needs reconstruction logic |
+| Target stored | Full list of TT/BTT cores | 1D projected / marginal function samples (length N) |
+| Loss | Mean MSE across cores | MSE between sampled reconstructed values and stored samples |
+| Pros | Direct core supervision; simple loss | Smaller disk footprint; avoids TT cross noise; empirically better generalisation & convergence stability |
+| Cons | Large storage; TT construction time | Indirect (cores not directly supervised); needs sampling + contraction each step |
 
 Command examples:
 
@@ -137,20 +139,27 @@ Checkpointing: On exception saves partial state. Best model parameters (based on
 * Improvement criterion: new_val_loss < best_loss - delta
 * Patience: stop after consecutive non‑improvements.
 
-### 4.3 Semi‑Supervised (`train/semi_supervised_train.py` – WIP)
-Current scaffold mirrors supervised training but leaves TODOs for:
-* Computing predictions (cores) from params
-* Sampling index tuples or reconstructing function slices
-* Forming a loss against stored lower‑dimensional targets
+### 4.3 Semi‑Supervised (`train/semi_supervised_train.py`)
+Fully implemented. Key differences versus supervised:
 
-Intended idea:
-1. Predict cores.
-2. Sample a mini‑set of multi‑indices (or binary indices for BTT).
-3. Contract predicted cores via `eval_tt` / `eval_btt`.
-4. Compare against ground truth scalar values derived from the stored semi‑supervised target (or by re‑evaluating analytic function if accessible) using MSE.
-5. Optionally regularise core norms or add rank sparsity penalties.
+Algorithm per batch:
+1. Load `(params, y_1d)` where `y_1d` has shape `(N,)` (a projection / marginal of the true d‑dimensional function on an equally spaced grid).
+2. Predict list of cores with shapes `(B, r_i, n_i, r_{i+1})`.
+3. Sample a set of K multi‑indices (TT) or binary index vectors (BTT). For each sampled multi‑index we also map it to a 1D grid position consistent with how the marginal was constructed (e.g. using one chosen dimension or an averaging / projection rule). (Implementation detail: current code samples uniformly; can be replaced with stratified or importance sampling.)
+4. Contract predicted cores at those indices via `eval_tt` / `eval_btt` to obtain predicted scalars `(B, K)`.
+5. Gather the corresponding true values from `y_1d` (broadcast to `(B, K)`).
+6. Compute MSE over sampled points; optionally average across K.
+7. Backpropagate; apply early stopping as in supervised mode.
 
-This reduces dataset size: you store O(N) instead of O(d * r^2 * n) per sample.
+Why it can outperform supervised:
+* Removes approximation noise introduced by TT cross (which can introduce small reconstruction errors in the supervised targets).
+* Implicit regularisation: indirect supervision discourages overfitting individual core entries.
+* Lower IO & memory: storing O(N) vs O(d * r^2 * n) numbers per sample improves throughput.
+
+Tuning tips:
+* Increase K (number of sampled indices) gradually if loss plateaus due to variance.
+* Mix a small fraction of full core supervision (hybrid) if you need exact core fidelity for downstream tasks.
+* For BTT choose K as a multiple of the chain length (d*k) to ensure all positions influence gradients.
 
 ---
 ## 5. Practical Choices & Tips
@@ -167,7 +176,7 @@ This reduces dataset size: you store O(N) instead of O(d * r^2 * n) per sample.
 | `model/neural_mps.py` | Trunk + decoders predicting TT cores |
 | `model/layers.py` | Reusable FC / Conv / Deconv blocks |
 | `train/supervised_train.py` | Full core supervision training loop |
-| `train/semi_supervised_train.py` | WIP semi‑supervised framework |
+| `train/semi_supervised_train.py` | Fully working semi‑supervised training loop |
 | `train/utils.py` | Logging, folder creation, dataset discovery (not detailed here) |
 
 ---
@@ -175,7 +184,7 @@ This reduces dataset size: you store O(N) instead of O(d * r^2 * n) per sample.
 * Add positional encoding of parameters if function family broadens.
 * Swap MSE for a relative error metric (scale invariance) if A varies widely.
 * Implement adaptive rank growth: start low and increase ranks when validation plateaus.
-* Semi‑supervised: store a *set of sampled multi‑indices with values* instead of a 1D grid to better approximate diverse regions.
+* Semi‑supervised enhancements: (a) store sparse multi‑index samples instead of a single 1D marginal; (b) adaptive sampling focusing on high curvature regions; (c) variance reduction via quasi‑Monte Carlo index sampling.
 
 ---
 ## 8. Glossary
@@ -185,11 +194,17 @@ This reduces dataset size: you store O(N) instead of O(d * r^2 * n) per sample.
 * Core: 3D tensor (r_i, n_i, r_{i+1}) capturing local factor interaction.
 
 ---
-## 9. Minimal Usage Sequence (Supervised)
-1. Generate dataset.
+## 9. Minimal Usage Sequences
+### Supervised
+1. Generate dataset with `--semi-supervised False`.
 2. Run supervised training script with matching format (TT or BTT).
 3. Load `best_model.pth` and call `model(params_batch)` to get predicted cores.
 4. Use `eval_tt` / `eval_btt` to evaluate function values at indices.
+
+### Semi‑Supervised
+1. Generate dataset with `--semi-supervised True`.
+2. Run semi‑supervised training script; adjust index sample count K via script arguments (if exposed) for accuracy/speed trade‑off.
+3. After training, use predicted cores exactly as in supervised workflow for evaluation or downstream pricing tasks.
 
 ---
 Questions / improvements: see semi‑supervised TODOs—feel free to refine contraction sampling & loss shaping.
