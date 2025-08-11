@@ -161,7 +161,6 @@ def main():
     print(f'TT-Cross (TT) distances: {tt_distances}')
     print(f'BTT-Cross (BTT) distances: {btt_distances}')
 
-    # Plot
     plt.figure(figsize=(10, 6))
     plt.plot(grid, original_values, label='Original Function', color='black', linewidth=2)
     plt.plot(tt_grid, tt_values, label='TT-Cross (TT)', color='red', linestyle='--', marker='o', markersize=4)

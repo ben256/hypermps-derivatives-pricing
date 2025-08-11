@@ -7,7 +7,7 @@ import tntorch as tn
 import torch
 from tqdm import tqdm
 
-from train_test.utils import create_recursive_folder
+from train.utils import create_recursive_folder
 
 
 def generate_covariance_matrix(

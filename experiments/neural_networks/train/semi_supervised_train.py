@@ -266,13 +266,13 @@ if __name__ == '__main__':
     parser.add_argument('--learning-rate', type=float, default=1e-5)
     parser.add_argument('--num-training-epochs', type=int, default=100)
     parser.add_argument('--early-stopping-patience', type=int, default=5)
-    parser.add_argument('--early-stopping-delta', type=float, default=0.0005)
+    parser.add_argument('--early-stopping-delta', type=float, default=0.001)
     parser.add_argument('--early-stopping-offset', type=int, default=4)
     parser.add_argument('--weight-decay', type=float, default=0.01)
     parser.add_argument('--dropout', type=float, default=0.1)
     parser.add_argument('--decoder-type', type=str, choices=['shared', 'split'], default='split')
     parser.add_argument('--dataset-dir', type=str, default='../data/datasets/')
-    parser.add_argument('--output-dir', type=str, default='../data/output')
+    parser.add_argument('--output-dir', type=str, default='../output')
 
     args = parser.parse_args()
 
