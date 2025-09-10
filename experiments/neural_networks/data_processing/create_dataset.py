@@ -156,7 +156,7 @@ def create_datasets(
                 ),
                 domain=domain,
                 eps=1e-7,
-                ranks_tt=ranks[1:-1],
+                ranks_tt=ranks,
                 max_iter=100,
                 early_stopping_patience=3,
                 early_stopping_tolerance=1e-8,
@@ -207,14 +207,14 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--n-samples', type=int, default=100000)
-    parser.add_argument('--d', type=int, default=4)
-    parser.add_argument('--N', type=int, default=64)
-    parser.add_argument('--max-rank', type=int, default=20)
+    parser.add_argument('--d', type=int, default=10)
+    parser.add_argument('--N', type=int, default=100)
+    parser.add_argument('--max-rank', type=int, default=15)
     parser.add_argument('--dataset-path', type=str, default='../data/datasets')
-    parser.add_argument('--correlation', type=float, default=0.3)
-    parser.add_argument('--format', type=str, choices=['TT', 'BTT'], default='BTT')
+    parser.add_argument('--correlation', type=float, default=0.75)
+    parser.add_argument('--format', type=str, choices=['TT', 'BTT'], default='TT')
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--semi-supervised', type=bool, default=True)
+    parser.add_argument('--semi-supervised', type=bool, default=False)
     parser.add_argument('--device', type=str, default='cpu')
     args = parser.parse_args()
 

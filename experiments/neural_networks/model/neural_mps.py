@@ -60,6 +60,26 @@ class CoreDecoder(nn.Module):
         return x
 
 
+class FNNCoreDecoder(nn.Module):
+    def __init__(
+            self,
+            hidden_size: int,
+            core_dims: tuple,
+    ):
+        super().__init__()
+        self.core_dims = core_dims
+        self.output_size = int(core_dims[0] * core_dims[1] * core_dims[2])
+
+        self.fc = nn.Linear(hidden_size, self.output_size)
+        self.tan = nn.Tanh()
+
+    def forward(self, x):
+        x = self.fc(x)
+        x = self.tan(x)  # [batch, core_dims[0] * core_dims[1] * core_dims[2]]
+        core = x.view(x.size(0), *self.core_dims)  # [batch, core_dims[0], core_dims[1], core_dims[2]]
+        return core
+
+
 class SplitDecoder(nn.Module):
     def __init__(
             self,
@@ -175,3 +195,37 @@ class NeuralMPS(nn.Module):
 
     def predict(self, *args, **kwargs):
         return self.forward(**kwargs)
+
+
+class FNNNeuralMPS(nn.Module):
+    def __init__(
+            self,
+            ranks: list[int],
+            n: int,
+            input_size: int,
+            hidden_size: int = 128,
+            num_layers: int = 3,
+            dropout: float = 0.1
+    ):
+        super().__init__()
+
+        num_cores = len(ranks) - 1
+        core_dims_list = [(ranks[i], n, ranks[i+1]) for i in range(len(ranks) - 1)]
+
+        self.fc1 = FCLayer(input_size, hidden_size, dropout)
+        self.hidden_layers = nn.ModuleList([
+            FCLayer(hidden_size, hidden_size, dropout) for _ in range(num_layers - 1)
+        ])
+        self.core_decoders = nn.ModuleList([
+            FNNCoreDecoder(hidden_size, core_dims_list[i])
+            for i in range(num_cores)
+        ])
+
+    def forward(self, params):
+
+        x = self.fc1(params)
+        for layer in self.hidden_layers:
+            x = layer(x)
+
+        cores = [decoder(x) for decoder in self.core_decoders]
+        return cores

@@ -82,7 +82,7 @@ def train(
         format: str = 'BTT',
 
         batch_size: int = 200,
-        learning_rate: int = 5e-6,
+        learning_rate: float = 5e-6,
         num_training_epochs: int = 20,
         early_stopping_patience: int = 5,
         early_stopping_delta: float = 0.0,
