@@ -197,7 +197,7 @@ def create_datasets(
         'test_size': test_size,
         'initial_seed': initial_seed,
         'semi_supervised': semi_supervised,
-        'input_size': d + (d * (d + 1)) // 2 + 1,  # A + c + cov_matrix
+        'input_size': d + (d * (d + 1)) // 2 + 1,
     }
     with open(f'{dataset_folder}/info.json', 'w') as f:
         json.dump(dataset_info, f, indent=4)
@@ -207,13 +207,13 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--n-samples', type=int, default=100000)
-    parser.add_argument('--d', type=int, default=10)
+    parser.add_argument('--d', type=int, default=2)
     parser.add_argument('--N', type=int, default=100)
-    parser.add_argument('--max-rank', type=int, default=15)
+    parser.add_argument('--max-rank', type=int, default=10)
     parser.add_argument('--dataset-path', type=str, default='../data/datasets')
-    parser.add_argument('--correlation', type=float, default=0.75)
+    parser.add_argument('--correlation', type=float, default=0.9)
     parser.add_argument('--format', type=str, choices=['TT', 'BTT'], default='TT')
-    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--seed', type=int, default=41)
     parser.add_argument('--semi-supervised', type=bool, default=False)
     parser.add_argument('--device', type=str, default='cpu')
     args = parser.parse_args()

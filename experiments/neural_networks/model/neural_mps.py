@@ -203,7 +203,7 @@ class FNNNeuralMPS(nn.Module):
             ranks: list[int],
             n: int,
             input_size: int,
-            hidden_size: int = 128,
+            hidden_size: int = 256,
             num_layers: int = 3,
             dropout: float = 0.1
     ):
