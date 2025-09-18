@@ -1,7 +1,7 @@
 import numpy as np
 from matplotlib import pyplot as plt
 
-from metrics import gaussian_kde
+from eval.metrics import gaussian_kde
 
 
 def plot_slices(
