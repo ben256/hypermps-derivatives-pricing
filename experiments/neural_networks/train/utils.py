@@ -1,9 +1,15 @@
 import json
+from dataclasses import dataclass
 from glob import glob
 
 import logging
 import os
 import sys
+from typing import Optional, Dict
+
+import numpy as np
+import torch
+from torch import nn
 
 
 def setup_logging(log_dir='../logs', log_file='training.log', save_to_file=True):
@@ -74,3 +80,45 @@ def create_recursive_folder(output_dir='../output', subfolder='training'):
 
     else:
         raise FileExistsError
+
+
+@dataclass
+class EarlyStopping:
+    patience: int = 8
+    delta: float = 0.0
+    offset: int = 5
+    best_loss: Optional[float] = None
+    counter: int = 0
+    best_state: Optional[Dict[str, torch.Tensor]] = None
+    stopped: bool = False
+
+    def step(self, epoch: int, val_loss: float, model: nn.Module):
+        if epoch < self.offset:
+            return
+        if self.best_loss is None or val_loss < self.best_loss - self.delta:
+            self.best_loss = val_loss
+            self.best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+            self.counter = 0
+        else:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.stopped = True
+
+
+def eval_tt(tt_cores, x_indices):
+    v = tt_cores[0][:, :, x_indices[0], :]
+    for i in range(1, len(tt_cores)):
+        v = v @ tt_cores[i][:, :, x_indices[i], :]
+    return v.sum()  # this maybe should be squeeze but haven't had time to test yet.
+
+
+def eval_qtt(btt_cores, x_indices, N):
+    k = int(np.log2(N))
+    binary_indices = []
+    for idx in x_indices:
+        binary_indices.extend([int(b) for b in bin(idx)[2:].zfill(k)])
+
+    v = btt_cores[0][:, :, binary_indices[0], :]
+    for i in range(1, len(btt_cores)):
+        v = v @ btt_cores[i][:, :, binary_indices[i], :]
+    return v.squeeze()

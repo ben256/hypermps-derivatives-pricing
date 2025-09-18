@@ -14,7 +14,7 @@ from model.neural_mps import FNNNeuralMPS, NeuralMPS
 from train.utils import create_recursive_folder, setup_logging, find_dataset, EarlyStopping, eval_qtt, eval_tt
 
 
-def compare_architectures(
+def compare_activations(
         d: int,
         N: int,
         correlation: float,
@@ -33,9 +33,9 @@ def compare_architectures(
         seed: int
 ):
 
-    test_output = create_recursive_folder(output_dir, 'compare_model_arch')
+    test_output = create_recursive_folder(output_dir, 'compare_activation')
     logger = setup_logging(test_output, 'benchmark.log')
-    logger.info('Starting model architecture comparison benchmark')
+    logger.info('Starting activation function comparison benchmark')
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     # device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
@@ -64,7 +64,6 @@ def compare_architectures(
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size)
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size)
 
-    logger.info(f'Dataset info: {json.dumps(dataset_info, indent=2)}')
     logger.info('Setting up model parameters')
     if format == 'TT':
         domain = [torch.arange(N, device=device) for _ in range(d)]
@@ -85,30 +84,18 @@ def compare_architectures(
     else:
         raise ValueError(f"Unsupported format: {format}")
 
-    cnn_model = NeuralMPS(
-        ranks=ranks,
-        n=n_model,
-        input_size=dataset_info['input_size'],
-        dropout=dropout,
-        decoder_type='split',
-    )
-    cnn_model.to(device)
+    activations = ['relu', 'tanh', 'linear']
 
-    fnn_model = FNNNeuralMPS(
-        ranks=ranks,
-        n=n_model,
-        input_size=dataset_info['input_size'],
-        dropout=dropout,
-        activation='tanh',
-    )
-    fnn_model.to(device)
-
-    models = {
-        'CNN': cnn_model,
-        'FNN': fnn_model,
-    }
-
-    for name, model in models.items():
+    for activation in activations:
+        logger.info(f'Starting training with activation: {activation}')
+        model = FNNNeuralMPS(
+            ranks=ranks,
+            n=n_model,
+            input_size=dataset_info['input_size'],
+            dropout=dropout,
+            activation=activation,
+        )
+        model.to(device)
 
         criterion = nn.MSELoss()
         optimiser = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
@@ -120,7 +107,7 @@ def compare_architectures(
             offset=early_stopping_offset,
         )
 
-        logger.info(f'Model Arch: {name}')
+        logger.info(f'Activation: {activation}')
         logger.info(f'Number of training epochs: {num_training_epochs}')
         logger.info(f'Batch size: {batch_size}')
         logger.info(f'Learning rate: {learning_rate}')
@@ -128,8 +115,8 @@ def compare_architectures(
         logger.info(f'Weight decay: {weight_decay}')
         logger.info(f'Dropout: {dropout}')
         logger.info(f'Dataset directory: {dataset_dir}')
-        logger.info(f'Output directory: {test_output}\n')
-        logger.info(f'Starting training with {name} model')
+        logger.info(f'Output directory: {test_output}')
+
         for epoch in range(num_training_epochs):
             model.train()
             epoch_train_loss = 0.0
@@ -175,7 +162,7 @@ def compare_architectures(
 
             logger.info(f'Epoch: {epoch + 1} | Train Loss: {avg_train_loss:.6f} | Validation Loss: {avg_val_loss:.6f}')
 
-            with open(f'{test_output}/loss_{name}.json', 'w') as f:
+            with open(f'{test_output}/loss.json', 'w') as f:
                 json.dump({'train': train_loss_history, 'validation': validation_loss_history}, f)
 
             early_stopping.step(epoch, avg_val_loss, model)
@@ -186,7 +173,7 @@ def compare_architectures(
         if early_stopping.best_state is not None:
             model.load_state_dict(early_stopping.best_state)
 
-        final_model_path = os.path.join(test_output, f'best_model_{name}.pth')
+        final_model_path = os.path.join(test_output, 'best_model.pth')
         torch.save({
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimiser.state_dict(),
@@ -217,19 +204,19 @@ def compare_architectures(
         y_pred = torch.cat(y_pred_list, dim=0).numpy()
 
         metrics, residuals, abs_err = compute_metrics(y_true, y_pred)
-        metrics_path = os.path.join(test_output, f'metrics_{name}.json')
+        metrics_path = os.path.join(test_output, f'metrics_{activation}.json')
         with open(metrics_path, 'w') as f:
             json.dump(metrics, f, indent=2)
 
-        plot_slices(y_true, y_pred, d, N, os.path.join(test_output, f'slices_{name}'))
-        plot_parity(y_true, y_pred, d, N,  os.path.join(test_output, f'parity_{name}'))
-        plot_residuals(residuals, abs_err, metrics, d, N, os.path.join(test_output, f'residuals_{name}'))
+        plot_slices(y_true, y_pred, d, N, os.path.join(test_output, f'slices_{activation}'))
+        plot_parity(y_true, y_pred, d, N,  os.path.join(test_output, f'parity_{activation}'))
+        plot_residuals(residuals, abs_err, metrics, d, N, os.path.join(test_output, f'residuals_{activation}'))
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--d', type=int, default=5)
-    parser.add_argument('--N', type=int, default=128)
+    parser.add_argument('--d', type=int, default=1)
+    parser.add_argument('--N', type=int, default=32)
     parser.add_argument('--max-rank', type=int, default=10)
     parser.add_argument('--correlation', type=float, default=0.5)
     parser.add_argument('--format', type=str, choices=['TT', 'QTT'], default='QTT')
@@ -248,7 +235,7 @@ def main():
 
     args = parser.parse_args()
 
-    compare_architectures(
+    compare_activations(
         d=args.d,
         N=args.N,
         correlation=args.correlation,

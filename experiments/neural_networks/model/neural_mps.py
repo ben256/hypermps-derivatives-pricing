@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 import torch.nn as nn
 
 from model.layers import ConvLayer, FCLayer, ConvTransposeLayer
@@ -60,23 +61,61 @@ class CoreDecoder(nn.Module):
         return x
 
 
+
+"""class FNNCoreDecoderLinear(nn.Module):
+    "
+    Linear core head with learnable scale (no ReLU).
+    Produces a dense TT core of shape (r_i, n_i, r_{i+1}).
+    "
+    def __init__(self, hidden_size: int, core_dims: tuple[int, int, int]):
+        super().__init__()
+        self.r_i, self.n_i, self.r_ip1 = core_dims
+        self.output_size = self.r_i * self.n_i * self.r_ip1
+        self.fc = nn.Linear(hidden_size, self.output_size)
+        self.log_scale = nn.Parameter(torch.zeros(1))  # preserves dynamic range
+
+        nn.init.xavier_uniform_(self.fc.weight)
+        nn.init.zeros_(self.fc.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        y = self.fc(x) * torch.exp(self.log_scale)
+        return y.view(x.size(0), self.r_i, self.n_i, self.r_ip1)"""
+
+
+
 class FNNCoreDecoder(nn.Module):
     def __init__(
             self,
             hidden_size: int,
             core_dims: tuple,
+            activation: str = 'tanh',
     ):
         super().__init__()
         self.core_dims = core_dims
         self.output_size = int(core_dims[0] * core_dims[1] * core_dims[2])
 
         self.fc = nn.Linear(hidden_size, self.output_size)
-        self.tan = nn.Tanh()
+
+        if activation == 'relu':
+            self.activation = nn.ReLU()
+        elif activation == 'tanh':
+            self.activation = nn.Tanh()
+        elif activation == 'linear':
+            self.activation = None
+            self.log_scale = nn.Parameter(torch.zeros(1))
+        else:
+            raise ValueError(f"Unsupported activation: {activation}")
+
+        nn.init.xavier_uniform_(self.fc.weight)
+        nn.init.zeros_(self.fc.bias)
 
     def forward(self, x):
         x = self.fc(x)
-        x = self.tan(x)  # [batch, core_dims[0] * core_dims[1] * core_dims[2]]
-        core = x.view(x.size(0), *self.core_dims)  # [batch, core_dims[0], core_dims[1], core_dims[2]]
+        if self.activation is not None:
+            x = self.activation(x)
+        else:
+            x = x * torch.exp(self.log_scale)
+        core = x.view(x.size(0), *self.core_dims)
         return core
 
 
@@ -205,9 +244,12 @@ class FNNNeuralMPS(nn.Module):
             input_size: int,
             hidden_size: int = 256,
             num_layers: int = 3,
-            dropout: float = 0.1
+            dropout: float = 0.1,
+            activation: str = 'tanh',
     ):
         super().__init__()
+
+        self.activation = activation
 
         num_cores = len(ranks) - 1
         core_dims_list = [(ranks[i], n, ranks[i+1]) for i in range(len(ranks) - 1)]
@@ -217,7 +259,7 @@ class FNNNeuralMPS(nn.Module):
             FCLayer(hidden_size, hidden_size, dropout) for _ in range(num_layers - 1)
         ])
         self.core_decoders = nn.ModuleList([
-            FNNCoreDecoder(hidden_size, core_dims_list[i])
+            FNNCoreDecoder(hidden_size, core_dims_list[i], activation=self.activation)
             for i in range(num_cores)
         ])
 
