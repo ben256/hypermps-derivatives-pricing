@@ -11,8 +11,8 @@ from torch import nn, optim
 from torch.utils.data import DataLoader
 
 from data_processing.dataset import TTDataset
-from eval.metrics import compute_metrics
-from eval.plots import plot_parity, plot_residuals, plot_slices
+from metrics import compute_metrics
+from plots import plot_parity, plot_residuals, plot_slices
 from model.neural_mps import FNNNeuralMPS
 from train.utils import (
 	create_recursive_folder,
