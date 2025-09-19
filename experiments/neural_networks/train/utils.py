@@ -117,9 +117,37 @@ def eval_qtt(btt_cores, x_indices, N):
     k = int(np.log2(N))
     binary_indices = []
     for idx in x_indices:
-        binary_indices.extend([int(b) for b in bin(idx)[2:].zfill(k)])
+        bits = bin(idx)[2:].zfill(k)
+        binary_indices.extend([int(b) for b in bits])
 
     v = btt_cores[0][:, :, binary_indices[0], :]
     for i in range(1, len(btt_cores)):
         v = v @ btt_cores[i][:, :, binary_indices[i], :]
     return v.squeeze()
+
+
+def build_ranks(
+        format: str,
+        d: int,
+        N: int,
+        max_rank: int,
+        device: torch.device
+):
+    if format == 'TT':
+        domain = [torch.arange(N, device=device) for _ in range(d)]
+        ranks = [1] + [max_rank] * (d - 1) + [1]
+        n_model = N
+    elif format == 'QTT':
+        k = int(np.log2(N))
+        n_model = 2
+        domain = [torch.arange(2, device=device) for _ in range(d * k)]
+
+        ranks = [1] * (d * k + 1)
+        for i in range(1, d * k):
+            growth = 2 ** min(i, d * k - i)
+            ranks[i] = min(growth, max_rank)
+
+    else:
+        raise ValueError(f"Unsupported format: {format}")
+
+    return ranks, domain, n_model

@@ -245,7 +245,7 @@ if __name__ == '__main__':
     parser.add_argument('--max-rank', type=int, default=10)
     parser.add_argument('--dataset-path', type=str, default='../data/datasets')
     parser.add_argument('--correlation', type=float, default=0.5)
-    parser.add_argument('--format', type=str, choices=['TT', 'QTT'], default='TT')
+    parser.add_argument('--format', type=str, choices=['TT', 'QTT'], default='QTT')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--semi-supervised', type=bool, default=True)
     parser.add_argument('--standardize-targets', action='store_true', default=True)

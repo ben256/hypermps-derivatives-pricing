@@ -11,7 +11,8 @@ from data_processing.dataset import TTDataset
 from eval.metrics import compute_metrics
 from eval.plots import plot_parity, plot_residuals, plot_slices
 from model.neural_mps import FNNNeuralMPS, NeuralMPS
-from train.utils import create_recursive_folder, setup_logging, find_dataset, EarlyStopping, eval_qtt, eval_tt
+from train.utils import create_recursive_folder, setup_logging, find_dataset, EarlyStopping, eval_qtt, eval_tt, \
+    build_ranks
 
 
 def compare_activations(
@@ -65,24 +66,13 @@ def compare_activations(
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size)
 
     logger.info('Setting up model parameters')
-    if format == 'TT':
-        domain = [torch.arange(N, device=device) for _ in range(d)]
-        ranks = [max_rank] * (d - 1)
-        n_model = N
-    elif format == 'QTT':
-        k = int(np.log2(N))
-        n_model = 2
-        domain = [torch.arange(2, device=device) for _ in range(d * k)]
-        ranks = [1]
-        for i in range(d * k):
-            if len(ranks) < (d * k) // 2:
-                ranks.append(min(ranks[-1] * 2, max_rank))
-            else:
-                ranks.append(min(ranks[-1] * 2, max_rank))
-                break
-        ranks.extend(ranks[::-1][1:])
-    else:
-        raise ValueError(f"Unsupported format: {format}")
+    ranks, domain, n_model = build_ranks(
+        format=format,
+        d=d,
+        N=N,
+        max_rank=max_rank,
+        device=device
+    )
 
     activations = ['relu', 'tanh', 'linear']
 
@@ -216,7 +206,7 @@ def compare_activations(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--d', type=int, default=1)
-    parser.add_argument('--N', type=int, default=32)
+    parser.add_argument('--N', type=int, default=128)
     parser.add_argument('--max-rank', type=int, default=10)
     parser.add_argument('--correlation', type=float, default=0.5)
     parser.add_argument('--format', type=str, choices=['TT', 'QTT'], default='QTT')

@@ -61,28 +61,6 @@ class CoreDecoder(nn.Module):
         return x
 
 
-
-"""class FNNCoreDecoderLinear(nn.Module):
-    "
-    Linear core head with learnable scale (no ReLU).
-    Produces a dense TT core of shape (r_i, n_i, r_{i+1}).
-    "
-    def __init__(self, hidden_size: int, core_dims: tuple[int, int, int]):
-        super().__init__()
-        self.r_i, self.n_i, self.r_ip1 = core_dims
-        self.output_size = self.r_i * self.n_i * self.r_ip1
-        self.fc = nn.Linear(hidden_size, self.output_size)
-        self.log_scale = nn.Parameter(torch.zeros(1))  # preserves dynamic range
-
-        nn.init.xavier_uniform_(self.fc.weight)
-        nn.init.zeros_(self.fc.bias)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        y = self.fc(x) * torch.exp(self.log_scale)
-        return y.view(x.size(0), self.r_i, self.n_i, self.r_ip1)"""
-
-
-
 class FNNCoreDecoder(nn.Module):
     def __init__(
             self,

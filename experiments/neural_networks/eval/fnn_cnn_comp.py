@@ -6,12 +6,13 @@ import numpy as np
 import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from data_processing.dataset import TTDataset
 from eval.metrics import compute_metrics
 from eval.plots import plot_parity, plot_residuals, plot_slices
 from model.neural_mps import FNNNeuralMPS, NeuralMPS
-from train.utils import create_recursive_folder, setup_logging, find_dataset, EarlyStopping, eval_qtt, eval_tt
+from train.utils import create_recursive_folder, setup_logging, find_dataset, EarlyStopping, eval_qtt, eval_tt, build_ranks
 
 
 def compare_architectures(
@@ -66,24 +67,13 @@ def compare_architectures(
 
     logger.info(f'Dataset info: {json.dumps(dataset_info, indent=2)}')
     logger.info('Setting up model parameters')
-    if format == 'TT':
-        domain = [torch.arange(N, device=device) for _ in range(d)]
-        ranks = [max_rank] * (d - 1)
-        n_model = N
-    elif format == 'QTT':
-        k = int(np.log2(N))
-        n_model = 2
-        domain = [torch.arange(2, device=device) for _ in range(d * k)]
-        ranks = [1]
-        for i in range(d * k):
-            if len(ranks) < (d * k) // 2:
-                ranks.append(min(ranks[-1] * 2, max_rank))
-            else:
-                ranks.append(min(ranks[-1] * 2, max_rank))
-                break
-        ranks.extend(ranks[::-1][1:])
-    else:
-        raise ValueError(f"Unsupported format: {format}")
+    ranks, domain, n_model = build_ranks(
+        format=format,
+        d=d,
+        N=N,
+        max_rank=max_rank,
+        device=device
+    )
 
     cnn_model = NeuralMPS(
         ranks=ranks,
@@ -133,7 +123,7 @@ def compare_architectures(
         for epoch in range(num_training_epochs):
             model.train()
             epoch_train_loss = 0.0
-            for batch_idx, (params, target) in enumerate(train_dataloader):
+            for batch_idx, (params, target) in tqdm(enumerate(train_dataloader)):
                 params = params.to(device, dtype=torch.float32)
                 target = target.to(device, dtype=torch.float32)
 
