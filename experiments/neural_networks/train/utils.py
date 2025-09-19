@@ -43,6 +43,7 @@ def find_dataset(
 ):
     selected = []
     datasets = glob(f'{dataset_dir}/dataset_*')
+    logging.info(f'Checking for datasets in {os.path.abspath(dataset_dir)}')
     datasets.sort()
     for dataset_folder in datasets:
         with open(f'{dataset_folder}/info.json', 'r') as f:
