@@ -1,94 +1,26 @@
 import argparse
-import logging
 import math
+import os
 
 import numpy as np
 import torch
-from matplotlib import pyplot as plt
 from torch import nn, optim
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 
 from dataset import TTDataset
-from process import sample_mixture_params, mixture_logpdf
 from model import QTTGenerator
-from utils import find_dataset, create_recursive_folder, setup_logging
-
-
-def bits_to_idx_nd(bits: torch.Tensor, d: int, N: int) -> torch.Tensor:
-    """
-    bits: [B, S, K]
-    returns idx_nd: [B, S, d]
-    """
-    B, S, K = bits.shape
-    k = int(math.log2(N))
-    # assert (1 << k) == N, "N must be power of 2"
-    # assert K == d * k, f"Expected K=d*k={d*k}, got {K}"
-    b = bits.to(torch.long).view(B, S, d, k)
-    pow2 = (2 ** torch.arange(k - 1, -1, -1, device=b.device)).view(1, 1, 1, k)
-    return (b * pow2).sum(dim=-1)  # [B, S, d]
-
-
-def idx_nd_to_flat(idx_nd: torch.Tensor, N: int) -> torch.Tensor:
-    """
-    idx_nd: [B, S, d]
-    """
-    d = idx_nd.shape[-1]
-    strides = torch.tensor([N ** (d - 1 - i) for i in range(d)],
-                           device=idx_nd.device, dtype=torch.long)
-    return (idx_nd * strides.view(1, 1, -1)).sum(dim=-1)
-
-
-def mixture_cond_len(d: int, n_components: int) -> int:
-    return n_components + n_components * d + n_components * (d * (d + 1) // 2)
-
-
-def sample_mixture_params_batch(
-        B: int, d: int, n_components: int, rng: np.random.Generator
-):
-    cond_dim = mixture_cond_len(d, n_components)
-    cond = np.zeros((B, cond_dim), dtype=np.float32)
-    params_list = []
-    for b in range(B):
-        weights, means, covs, invs, log_norms = sample_mixture_params(rng, d, n_components=n_components)
-        parts = [weights.flatten(), means.flatten()]
-        for cov in covs:
-            parts.append(np.triu(cov)[np.triu_indices(d)])
-        cond[b] = np.concatenate(parts).astype(np.float32)
-        params_list.append({
-            "weights": weights,
-            "means": means,
-            "invs": invs,
-            "log_norms": log_norms,
-        })
-    return torch.from_numpy(cond), params_list
-
-
-@torch.no_grad()
-def mixture_oracle_ytrue(
-        idx_nd: torch.Tensor,  # [B,S,d]
-        grid: torch.Tensor,  # [N]
-        params_list: list,  # len B, dict for each batch item
-        output_space: str = "density",
-) -> torch.Tensor:
-    """
-    y_true: [B,S].
-    """
-    device = idx_nd.device
-    B, S, d = idx_nd.shape
-    grid_np = grid.detach().cpu().numpy()
-    outs = []
-    for b in range(B):
-        # Build X_b: [d,S] by indexing grid along each dim
-        Xb = np.vstack([grid_np[idx_nd[b, :, j].detach().cpu().numpy()] for j in range(d)])
-        p = params_list[b]
-        logp = mixture_logpdf(Xb, p["weights"], p["means"], p["invs"], p["log_norms"])  # [S]
-        if output_space == "log":
-            y = torch.from_numpy(logp).to(device=device, dtype=torch.float32)
-        else:
-            y = torch.from_numpy(np.exp(logp)).to(device=device, dtype=torch.float32)
-        outs.append(y)
-    return torch.stack(outs, dim=0)  # [B,S]
+from eval import evaluate_on_dataset, evaluate_with_oracle
+from utils import (
+    find_dataset,
+    create_recursive_folder,
+    setup_logging,
+    bits_to_idx_nd,
+    idx_nd_to_flat,
+    mixture_cond_len,
+    sample_mixture_params_batch,
+    mixture_oracle_ytrue,
+)
 
 
 def train_hypernetwork(
@@ -109,6 +41,10 @@ def train_hypernetwork(
         grid_min: float = -4.0,
         grid_max: float = 4.0,
         output_space: str = "log",
+        val_every: int = 1000,
+        val_batch_size: int = None,
+        val_max_points: int = 262144,
+        save_plots: bool = True,
 ):
     """
     - Oracle: uses mixture oracle from process.py
@@ -125,8 +61,15 @@ def train_hypernetwork(
     S = num_samples
     grid = torch.linspace(grid_min, grid_max, N, device=device)
 
+    # Data: training
     if use_dataset:
-        train_file, _, _, _ = find_dataset(dataset_dir, d=d, N=N, correlation=correlation)
+        try:
+            # try to get val file too
+            train_file, val_file, _, _ = find_dataset(dataset_dir, d=d, N=N, correlation=correlation)
+        except Exception:
+            train_file, val_file = None, None
+
+        assert train_file is not None, "Training dataset file not found via find_dataset()."
         train_dataset = TTDataset(torch.load(train_file))
         train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=False)
         sample_param, _ = next(iter(train_dataloader))
@@ -134,6 +77,18 @@ def train_hypernetwork(
     else:
         cond_dim = mixture_cond_len(d, n_components)
         train_dataloader = None
+        train_file, val_file = None, None
+
+    # Data: validation (prefer dataset)
+    val_loader = None
+    if val_batch_size is None:
+        val_batch_size = batch_size
+    if val_file is None and use_dataset:
+        # reuse train as validation if no explicit val split
+        val_file = train_file
+    if val_file is not None and os.path.exists(val_file):
+        val_dataset = TTDataset(torch.load(val_file))
+        val_loader = DataLoader(val_dataset, batch_size=val_batch_size, shuffle=False, drop_last=False)
 
     model = QTTGenerator(
         d=d,
@@ -194,29 +149,43 @@ def train_hypernetwork(
             logger.info(f"step {step}/{steps}  loss={loss.item():.6f}")
         step += 1
 
+        if (step % max(1, val_every)) == 0 and step > 0:
+            tag = f"step{step}"
+            if val_loader is not None:
+                evaluate_on_dataset(
+                    model, val_loader, d, N, grid, output_space,
+                    out_dir, device, tag, val_max_points, save_plots, logger
+                )
+            else:
+                evaluate_with_oracle(
+                    model, d, N, n_components, rng, grid, output_space,
+                    out_dir, device, tag, val_max_points, save_plots, batch_size, logger
+                )
+
     logger.info("Done")
-    # try:
-    #     if d == 1 and not use_dataset:
-    #         export_dense_plots_1d(
-    #             model=model,
-    #             N=N,
-    #             n_components=n_components,
-    #             grid_min=grid_min,
-    #             grid_max=grid_max,
-    #             output_space=output_space,
-    #             device=device,
-    #             rng=rng,
-    #             out_dir=out_dir,
-    #             num_examples=4,
-    #         )
-    #         logger.info(f"Saved dense recon plots to {out_dir}/eval_plots")
-    # except Exception as e:
-    #     logger.error(f"Dense export failed: {e}")
+    final_model_path = os.path.join(output_dir, 'best_model.pth')
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimiser.state_dict(),
+    }, final_model_path)
+
+    # final validation
+    tag = "final"
+    if val_loader is not None:
+        evaluate_on_dataset(
+            model, val_loader, d, N, grid, output_space,
+            out_dir, device, tag, val_max_points, True, logger
+        )
+    else:
+        evaluate_with_oracle(
+            model, d, N, n_components, rng, grid, output_space,
+            out_dir, device, tag, val_max_points, True, batch_size, logger
+        )
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--d', type=int, default=1)
+    parser.add_argument('--d', type=int, default=2)
     parser.add_argument('--N', type=int, default=128)
     parser.add_argument('--correlation', type=float, default=0.5)
     parser.add_argument('--max-rank', type=int, default=10)
@@ -233,7 +202,14 @@ def main():
     parser.add_argument('--dataset-dir', type=str, default='./datasets')
     parser.add_argument('--output-dir', type=str, default='./output')
     parser.add_argument('--seed', type=int, default=42)
+
+    parser.add_argument('--val-every', type=int, default=1000)
+    parser.add_argument('--val-batch-size', type=int, default=0)
+    parser.add_argument('--val-max-points', type=int, default=262144)
+    parser.add_argument('--save-plots', type=bool, default=True)
     args = parser.parse_args()
+
+    val_bs = None if (args.val_batch_size is None or args.val_batch_size == 0) else args.val_batch_size
 
     train_hypernetwork(
         d=args.d,
@@ -252,7 +228,12 @@ def main():
         grid_max=args.grid_max,
         dataset_dir=args.dataset_dir,
         output_dir=args.output_dir,
-        seed=args.seed)
+        seed=args.seed,
+        val_every=args.val_every,
+        val_batch_size=val_bs,
+        val_max_points=args.val_max_points,
+        save_plots=args.save_plots,
+    )
 
 
 if __name__ == '__main__':

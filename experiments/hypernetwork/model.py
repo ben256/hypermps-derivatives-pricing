@@ -104,34 +104,6 @@ class QTTGenerator(nn.Module):
         self.bank = QTTCoreBank(r=r, M=M, orth_penalty=orth_penalty)
         self.seq = QTTSeq(d, L, cond_dim=cond_dim, emb=128, hid=256, M=M, num_layers=2, dropout=0.1)
 
-        in_feat = 256 + 2 * M  # mean-pooled h plus alpha mean & std
-        self.dense_head = nn.Sequential(
-            nn.Linear(in_feat, max(256, in_feat)),
-            nn.ReLU(),
-            nn.Linear(max(256, in_feat), 256),
-            nn.ReLU(),
-        )
-
-        self.proj = nn.Linear(256, 128)
-
-    def forward_dense(self, cond, out_dim):
-        """
-        cond: [B, cond_dim]
-        out_dim: integer (e.g. d*N)
-        returns: [B, out_dim]
-        """
-        alpha, h = self.seq(cond)  # alpha: [B,K,M], h: [B,K,256]
-
-        h_pool = h.mean(dim=1)  # [B, 256]
-        alpha_mean = alpha.mean(dim=1)  # [B, M]
-        alpha_std = alpha.std(dim=1)  # [B, M]
-        z = torch.cat([h_pool, alpha_mean, alpha_std], dim=-1)  # [B, 256 + 2M]
-
-        z_mid = self.dense_head(z)  # [B, 256]
-        out = self.proj(z_mid)  # [B, out_dim]  can just combine these two actually...
-        return out
-
-
     def forward_sampled(self, cond, bits):
         """
         cond: [B, cond_dim]
