@@ -40,7 +40,7 @@ def compare_activations(
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     # device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
-    logger.info(f'Using device: {device}{f":{device.index}" if device.type == "cuda" else ""}')
+    logger.info(f'Using device: {device}')
 
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -205,7 +205,7 @@ def compare_activations(
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--d', type=int, default=1)
+    parser.add_argument('--d', type=int, default=5)
     parser.add_argument('--N', type=int, default=128)
     parser.add_argument('--max-rank', type=int, default=10)
     parser.add_argument('--correlation', type=float, default=0.5)

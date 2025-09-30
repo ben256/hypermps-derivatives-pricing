@@ -9,22 +9,6 @@ from tqdm import tqdm
 from train.utils import create_recursive_folder
 
 
-def sp_log_transform(data: np.ndarray) -> np.ndarray:
-    """Pure NumPy SP-log transform: y = log10(10^x - 1), pass-through for very large x."""
-    mask = (data > 1000)
-    inv_mask = 1.0 - mask
-    transformed = np.log10(np.power(10.0, data * inv_mask) - 1.0 + mask)
-    return transformed * inv_mask + data * mask
-
-
-def sp_log_inverse_transform(data: np.ndarray) -> np.ndarray:
-    """Inverse of SP-log transform in pure NumPy: x = log10(10^y + 1), pass-through for very large y."""
-    mask = (data > 1000)
-    inv_mask = 1.0 - mask
-    inv = np.log10(np.power(10.0, data * inv_mask) + 1.0 + mask)
-    return inv * inv_mask + data * mask
-
-
 def generate_covariance_matrix(
         rng: np.random.Generator,
         d: int,
