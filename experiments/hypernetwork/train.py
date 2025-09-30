@@ -1,55 +1,60 @@
 import argparse
 import math
 import os
+import logging
 
 import numpy as np
 import torch
 from torch import nn, optim
-from torch.utils.data import DataLoader
 import torch.nn.functional as F
+from matplotlib import pyplot as plt
 
-from dataset import TTDataset
 from model import QTTGenerator
-from eval import evaluate_on_dataset, evaluate_with_oracle
 from utils import (
-    find_dataset,
-    create_recursive_folder,
-    setup_logging,
     bits_to_idx_nd,
-    idx_nd_to_flat,
+    idx_nd_to_bits,
+    flat_to_idx_nd,
     mixture_cond_len,
     sample_mixture_params_batch,
     mixture_oracle_ytrue,
+    setup_logging, create_recursive_folder,
 )
+
+
+# Module-level logger (configured in main via setup_logging)
+logger = logging.getLogger(__name__)
+
+
+def _select_validation_indices(N: int, d: int, device: torch.device, max_points: int) -> torch.Tensor:
+    total = N ** d
+    if total <= max_points:
+        return torch.arange(total, device=device, dtype=torch.long)  # [S]
+    perm = torch.randperm(total, device=device)
+    return perm[:max_points]  # [S]
 
 
 def train_hypernetwork(
         d: int,
         N: int,
-        correlation: float,
         basis_cores: int,
         max_rank: int,
         batch_size: int,
         learning_rate: float,
         steps: int,
-        dataset_dir: str,
         output_dir: str,
         seed: int,
         num_samples: int = 2048,
-        use_dataset: bool = False,
         n_components: int = 1,
         grid_min: float = -4.0,
         grid_max: float = 4.0,
         output_space: str = "log",
         val_every: int = 1000,
-        val_batch_size: int = None,
         val_max_points: int = 262144,
-        save_plots: bool = True,
 ):
-    """
-    - Oracle: uses mixture oracle from process.py
-    - Dataset mode: gathers y_true from dense targets
-    """
+
+    output_dir = create_recursive_folder(output_dir, 'training')
+    logger = setup_logging(output_dir)
+
     torch.manual_seed(seed)
     np.random.seed(seed)
     rng = np.random.default_rng(seed)
@@ -61,34 +66,8 @@ def train_hypernetwork(
     S = num_samples
     grid = torch.linspace(grid_min, grid_max, N, device=device)
 
-    # Data: training
-    if use_dataset:
-        try:
-            # try to get val file too
-            train_file, val_file, _, _ = find_dataset(dataset_dir, d=d, N=N, correlation=correlation)
-        except Exception:
-            train_file, val_file = None, None
-
-        assert train_file is not None, "Training dataset file not found via find_dataset()."
-        train_dataset = TTDataset(torch.load(train_file))
-        train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=False)
-        sample_param, _ = next(iter(train_dataloader))
-        cond_dim = sample_param.size(1)
-    else:
-        cond_dim = mixture_cond_len(d, n_components)
-        train_dataloader = None
-        train_file, val_file = None, None
-
-    # Data: validation (prefer dataset)
-    val_loader = None
-    if val_batch_size is None:
-        val_batch_size = batch_size
-    if val_file is None and use_dataset:
-        # reuse train as validation if no explicit val split
-        val_file = train_file
-    if val_file is not None and os.path.exists(val_file):
-        val_dataset = TTDataset(torch.load(val_file))
-        val_loader = DataLoader(val_dataset, batch_size=val_batch_size, shuffle=False, drop_last=False)
+    # conditioning dimension implied by oracle mixture params
+    cond_dim = mixture_cond_len(d, n_components)
 
     model = QTTGenerator(
         d=d,
@@ -101,42 +80,24 @@ def train_hypernetwork(
 
     optimiser = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
 
-    out_dir = create_recursive_folder(output_dir, 'training_sampled')
-    logger = setup_logging(out_dir)
-    logger.info('Start sampled-contraction training')
+    logger.info(f"Starting training | d={d} N={N} k={k} K={K} S={S} max_rank={max_rank} basis_cores={basis_cores} "
+                f"batch_size={batch_size} lr={learning_rate} steps={steps} n_components={n_components} "
+                f"grid=[{grid_min},{grid_max}] output_space={output_space} device={device}")
 
     step = 0
-    data_iter = iter(train_dataloader) if use_dataset else None
+    model.train()
 
     while step < steps:
-        if use_dataset:
-            try:
-                params, targets_full = next(data_iter)
-            except StopIteration:
-                data_iter = iter(train_dataloader)
-                params, targets_full = next(data_iter)
+        # Oracle batch
+        B = batch_size
+        cond_params, params_list = sample_mixture_params_batch(B, d, n_components, rng)
+        params = cond_params.to(device, dtype=torch.float32)  # [B, cond_dim]
 
-            params = params.to(device, dtype=torch.float32)  # [B, cond_dim]
-            targets_full = targets_full.to(device, dtype=torch.float32)  # [B, N^d]
-            B = params.size(0)
+        bits = torch.randint(0, 2, (B, S, K), device=device, dtype=torch.long)
+        pred = model.forward_sampled(params, bits)  # [B,S]
 
-            bits = torch.randint(0, 2, (B, S, K), device=device, dtype=torch.long)
-            pred = model.forward_sampled(params, bits)  # [B,S]
-
-            idx_nd = bits_to_idx_nd(bits, d=d, N=N)  # [B,S,d]
-            idx_flat = idx_nd_to_flat(idx_nd, N=N)  # [B,S]
-            y_true = targets_full.gather(dim=1, index=idx_flat)  # [B,S]
-
-        else:
-            B = batch_size
-            cond_params, params_list = sample_mixture_params_batch(B, d, n_components, rng)
-            params = cond_params.to(device, dtype=torch.float32)  # [B, cond_dim]
-
-            bits = torch.randint(0, 2, (B, S, K), device=device, dtype=torch.long)
-            pred = model.forward_sampled(params, bits)  # [B,S]
-
-            idx_nd = bits_to_idx_nd(bits, d=d, N=N)  # [B,S,d]
-            y_true = mixture_oracle_ytrue(idx_nd, grid, params_list, output_space=output_space)
+        idx_nd = bits_to_idx_nd(bits, d=d, N=N)  # [B,S,d]
+        y_true = mixture_oracle_ytrue(idx_nd, grid, params_list, output_space=output_space)
 
         loss = F.mse_loss(pred, y_true) + model.orth_loss()
 
@@ -150,89 +111,135 @@ def train_hypernetwork(
         step += 1
 
         if (step % max(1, val_every)) == 0 and step > 0:
-            tag = f"step{step}"
-            if val_loader is not None:
-                evaluate_on_dataset(
-                    model, val_loader, d, N, grid, output_space,
-                    out_dir, device, tag, val_max_points, save_plots, logger
-                )
-            else:
-                evaluate_with_oracle(
-                    model, d, N, n_components, rng, grid, output_space,
-                    out_dir, device, tag, val_max_points, save_plots, batch_size, logger
-                )
+            model.eval()
+            with torch.no_grad():
+                sum_se = 0.0
+                sum_ae = 0.0
+                sum_var = 0.0
+                total_elems = 0
+                num_val_batches = 4
+                for _ in range(num_val_batches):
+                    Bv = batch_size
+                    cond_params_v, params_list_v = sample_mixture_params_batch(Bv, d, n_components, rng)
+                    params_v = cond_params_v.to(device, dtype=torch.float32)
 
-    logger.info("Done")
+                    idx_flat_sel = _select_validation_indices(N, d, device, val_max_points)  # [Ssel]
+                    idx_nd_sel = flat_to_idx_nd(idx_flat_sel, d, N)  # [Ssel,d]
+                    idx_nd_b = idx_nd_sel.unsqueeze(0).expand(Bv, -1, -1).contiguous()  # [Bv,Ssel,d]
+                    bits_v = idx_nd_to_bits(idx_nd_b, d=d, N=N)  # [Bv,Ssel,K]
+
+                    pred_v = model.forward_sampled(params_v, bits_v)  # [Bv,Ssel]
+                    y_true_v = mixture_oracle_ytrue(idx_nd_b, grid, params_list_v, output_space=output_space)  # [Bv,Ssel]
+
+                    diff = pred_v - y_true_v
+                    sum_se += (diff.pow(2)).sum().item()
+                    sum_ae += (diff.abs()).sum().item()
+                    y_mean = y_true_v.mean(dim=1, keepdim=True)
+                    sum_var += ((y_true_v - y_mean).pow(2)).sum().item()
+                    total_elems += Bv * y_true_v.size(1)
+
+                mse = sum_se / max(1, total_elems)
+                mae = sum_ae / max(1, total_elems)
+                r2 = 1.0 - (sum_se / max(1e-12, sum_var)) if sum_var > 0 else float('nan')
+                logger.info(f"[eval step {step}] mse={mse:.6f} mae={mae:.6f} r2={r2:.6f}")
+            model.train()
+
+    logger.info("Training complete. Saving model and final plots...")
     final_model_path = os.path.join(output_dir, 'best_model.pth')
     torch.save({
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimiser.state_dict(),
     }, final_model_path)
 
-    # final validation
-    tag = "final"
-    if val_loader is not None:
-        evaluate_on_dataset(
-            model, val_loader, d, N, grid, output_space,
-            out_dir, device, tag, val_max_points, True, logger
-        )
-    else:
-        evaluate_with_oracle(
-            model, d, N, n_components, rng, grid, output_space,
-            out_dir, device, tag, val_max_points, True, batch_size, logger
-        )
+    # Final 4×d plot: 4 random samples (columns) × d dimensions (rows)
+    model.eval()
+    with torch.no_grad():
+        cols = 4
+        cond_params_plot, params_list_plot = sample_mixture_params_batch(cols, d, n_components, rng)
+        params_plot = cond_params_plot.to(device, dtype=torch.float32)  # [4,cond_dim]
+
+        center = N // 2
+        fig = plt.figure(figsize=(4 * cols, 3 * d))
+
+        x_axis = grid.detach().cpu().numpy()
+        ylabel = "log-density" if output_space == "log" else "density"
+
+        for c in range(cols):
+            for j in range(d):
+                # build indices for a slice varying dimension j
+                coords = []
+                for dim in range(d):
+                    if dim == j:
+                        coords.append(torch.arange(N, device=device, dtype=torch.long))  # [N]
+                    else:
+                        coords.append(torch.full((N,), center, device=device, dtype=torch.long))
+                idx_nd_slice = torch.stack(coords, dim=-1).unsqueeze(0)  # [1,N,d]
+                bits_slice = idx_nd_to_bits(idx_nd_slice, d=d, N=N)  # [1,N,K]
+
+                pred_slice = model.forward_sampled(params_plot[c:c+1], bits_slice).squeeze(0).detach().cpu().numpy()  # [N]
+                y_true_slice = mixture_oracle_ytrue(
+                    idx_nd_slice, grid, [params_list_plot[c]], output_space=output_space
+                ).squeeze(0).detach().cpu().numpy()
+
+                ax = fig.add_subplot(d, cols, j * cols + c + 1)
+                ax.plot(x_axis, y_true_slice, label="target", lw=2)
+                ax.plot(x_axis, pred_slice, label="pred", lw=2)
+                if j == d - 1:
+                    ax.set_xlabel("x")
+                if c == 0:
+                    ax.set_ylabel(ylabel)
+                if j == 0:
+                    ax.set_title(f"sample {c}")
+        # only one legend for the whole figure
+        handles, labels = ax.get_legend_handles_labels()
+        fig.legend(handles, labels, loc='upper right')
+        fig.tight_layout(rect=(0, 0, 0.98, 1))
+        out_path = os.path.join(output_dir, f"final_4x{d}_slices.png")
+        plt.savefig(out_path, dpi=150)
+        plt.close(fig)
+
+    logger.info(f"Saved model to {final_model_path}")
+    logger.info(f"Saved final plot to {out_path}")
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--d', type=int, default=2)
+    parser.add_argument('--d', type=int, default=5)
     parser.add_argument('--N', type=int, default=128)
-    parser.add_argument('--correlation', type=float, default=0.5)
-    parser.add_argument('--max-rank', type=int, default=10)
+    parser.add_argument('--max-rank', type=int, default=15)
     parser.add_argument('--basis-cores', type=int, default=8)
-    parser.add_argument('--batch-size', type=int, default=50)
+    parser.add_argument('--batch-size', type=int, default=200)
     parser.add_argument('--learning-rate', type=float, default=1e-4)
     parser.add_argument('--num-samples', type=int, default=2048)
-    parser.add_argument('--steps', type=int, default=10000)
-    parser.add_argument('--use-dataset', type=bool, default=False)
+    parser.add_argument('--steps', type=int, default=100000)
     parser.add_argument('--n-components', type=int, default=1)
     parser.add_argument('--grid-min', type=float, default=-4.0)
     parser.add_argument('--grid-max', type=float, default=4.0)
     parser.add_argument('--output-space', type=str, choices=['log', 'density'], default='log')
-    parser.add_argument('--dataset-dir', type=str, default='./datasets')
     parser.add_argument('--output-dir', type=str, default='./output')
     parser.add_argument('--seed', type=int, default=42)
 
     parser.add_argument('--val-every', type=int, default=1000)
-    parser.add_argument('--val-batch-size', type=int, default=0)
     parser.add_argument('--val-max-points', type=int, default=262144)
-    parser.add_argument('--save-plots', type=bool, default=True)
     args = parser.parse_args()
-
-    val_bs = None if (args.val_batch_size is None or args.val_batch_size == 0) else args.val_batch_size
 
     train_hypernetwork(
         d=args.d,
         N=args.N,
-        correlation=args.correlation,
         basis_cores=args.basis_cores,
         max_rank=args.max_rank,
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
         num_samples=args.num_samples,
         steps=args.steps,
-        use_dataset=args.use_dataset,
         n_components=args.n_components,
         output_space=args.output_space,
         grid_min=args.grid_min,
         grid_max=args.grid_max,
-        dataset_dir=args.dataset_dir,
         output_dir=args.output_dir,
         seed=args.seed,
         val_every=args.val_every,
-        val_batch_size=val_bs,
         val_max_points=args.val_max_points,
-        save_plots=args.save_plots,
     )
 
 

@@ -15,8 +15,8 @@ def _select_validation_indices(N: int, d: int, device: torch.device, max_points:
     total = N ** d
     if total <= max_points:
         return torch.arange(total, device=device, dtype=torch.long)  # [S]
-    perm = torch.randperm(total, device=device)
-    return perm[:max_points]  # [S]
+    # Fast uniform sampling (with replacement). If you need uniqueness, use numpy choice with replace=False on CPU.
+    return torch.randint(0, total, (max_points,), device=device, dtype=torch.long)
 
 
 @torch.no_grad()
