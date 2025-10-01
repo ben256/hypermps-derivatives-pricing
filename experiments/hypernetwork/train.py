@@ -127,7 +127,7 @@ def train_hypernetwork(
                     cond_params_v, params_list_v = sample_mixture_params_batch(Bv, d, n_components, rng)
                     params_v = cond_params_v.to(device, dtype=torch.float32)
 
-                    idx_flat_sel = _select_validation_indices(N, d, device, val_max_points)  # [Ssel]
+                    idx_flat_sel = select_validation_indices(N, d, device, val_max_points)  # [Ssel]
                     idx_nd_sel = flat_to_idx_nd(idx_flat_sel, d, N)  # [Ssel,d]
                     idx_nd_b = idx_nd_sel.unsqueeze(0).expand(Bv, -1, -1).contiguous()  # [Bv,Ssel,d]
                     bits_v = idx_nd_to_bits(idx_nd_b, d=d, N=N)  # [Bv,Ssel,K]
