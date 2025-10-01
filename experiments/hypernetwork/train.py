@@ -212,10 +212,10 @@ def main():
     parser.add_argument('--N', type=int, default=128)
     parser.add_argument('--max-rank', type=int, default=15)
     parser.add_argument('--basis-cores', type=int, default=8)
-    parser.add_argument('--batch-size', type=int, default=200)
+    parser.add_argument('--batch-size', type=int, default=100)
     parser.add_argument('--learning-rate', type=float, default=1e-4)
-    parser.add_argument('--num-samples', type=int, default=2048)
-    parser.add_argument('--steps', type=int, default=100000)
+    parser.add_argument('--num-samples', type=int, default=1024)
+    parser.add_argument('--steps', type=int, default=50000)
     parser.add_argument('--n-components', type=int, default=1)
     parser.add_argument('--grid-min', type=float, default=-4.0)
     parser.add_argument('--grid-max', type=float, default=4.0)
@@ -223,8 +223,8 @@ def main():
     parser.add_argument('--output-dir', type=str, default='./output')
     parser.add_argument('--seed', type=int, default=42)
 
-    parser.add_argument('--val-every', type=int, default=1000)
-    parser.add_argument('--val-max-points', type=int, default=262144)
+    parser.add_argument('--val-every', type=int, default=25)
+    parser.add_argument('--val-max-points', type=int, default=1024)
     args = parser.parse_args()
 
     train_hypernetwork(
