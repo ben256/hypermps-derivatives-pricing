@@ -18,19 +18,21 @@ from utils import (
     mixture_cond_len,
     sample_mixture_params_batch,
     mixture_oracle_ytrue,
-    setup_logging, create_recursive_folder,
+    setup_logging,
+    create_recursive_folder,
 )
 
 
 logger = logging.getLogger(__name__)
 
 
-def _select_validation_indices(N: int, d: int, device: torch.device, max_points: int) -> torch.Tensor:
+def select_validation_indices(N: int, d: int, device: torch.device, max_points: int) -> torch.Tensor:
     total = N ** d
-    if total <= max_points:
-        return torch.arange(total, device=device, dtype=torch.long)  # [S]
-    perm = torch.randperm(total, device=device)
-    return perm[:max_points]  # [S]
+    k = int(min(max_points, total))
+    if total <= k:
+        return torch.arange(total, device=device, dtype=torch.long)
+    sel = random.sample(range(total), k)
+    return torch.tensor(sel, dtype=torch.long, device=device)
 
 
 def train_hypernetwork(
