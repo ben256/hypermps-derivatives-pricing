@@ -2,6 +2,7 @@ import argparse
 import math
 import os
 import logging
+import random
 
 import numpy as np
 import torch
@@ -21,7 +22,6 @@ from utils import (
 )
 
 
-# Module-level logger (configured in main via setup_logging)
 logger = logging.getLogger(__name__)
 
 
@@ -57,6 +57,8 @@ def train_hypernetwork(
 
     torch.manual_seed(seed)
     np.random.seed(seed)
+    random.seed(seed)
+
     rng = np.random.default_rng(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
