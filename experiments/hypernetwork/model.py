@@ -33,26 +33,27 @@ class QTTCoreBank(nn.Module):
 class QTTSeq(nn.Module):
     """
     Sequence model that outputs per-core mixture weights alpha_k
-    conditioned on 'cond' of shape [B, cond_dim].
+    conditioned on 'cond' of shape [B, conditional_dim].
     """
-    def __init__(self, d, L, cond_dim, emb=128, hid=256, M=8, num_layers=2, dropout=0.1):
+    def __init__(self, d, L, conditional_dim, embedding_dim=128, hidden_dim=256, M=8, num_layers=2, dropout=0.1):
         super().__init__()
         self.d, self.L, self.K = d, L, d * L
-        self.cond_dim = cond_dim
+        self.conditional_dim = conditional_dim
         self.M = M
 
-        self.dim_emb = nn.Embedding(d, emb)
-        self.lvl_emb = nn.Embedding(L, emb)
-        self.cond_proj = nn.Linear(cond_dim, hid)
-        self.in_proj = nn.Linear(emb, hid)
-        self.gru = nn.GRU(hid, hid, num_layers=num_layers, dropout=dropout, batch_first=True)
+        self.dimension_embedding = nn.Embedding(d, embedding_dim)
+        self.bit_level_embedding = nn.Embedding(L, embedding_dim)
+        self.conditional_proj = nn.Linear(conditional_dim, hidden_dim)
+        self.embedding_proj = nn.Linear(embedding_dim, hidden_dim)
+        self.gru = nn.GRU(hidden_dim, hidden_dim, num_layers=num_layers, dropout=dropout, batch_first=True)
         self.head = nn.Sequential(
-            nn.Linear(hid, hid),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hid, M)
+            nn.Linear(hidden_dim, M)
         )
 
-        # precompute token indices once (will move to device at forward)
+        # precompute token indices once
+        # interleaved by dimension then level, can be the other way round depending on induction bias preference (whatever that means)
         tokens = []
         for j in range(d):
             for l in range(L):
@@ -68,10 +69,10 @@ class QTTSeq(nn.Module):
 
     def forward(self, cond):
         """
-        cond: [B, cond_dim]
+        cond: [B, conditional_dim]
         returns:
           alpha: [B, K, M] mixture per position
-          h:     [B, K, hid] hidden states (for optional readouts)
+          h:     [B, K, hidden_dim] hidden states (for optional readouts)
         """
         B = cond.size(0)
         device = cond.device
@@ -79,15 +80,20 @@ class QTTSeq(nn.Module):
         dim_idx = self.dim_idx_cpu.to(device)
         lvl_idx = self.lvl_idx_cpu.to(device)
 
-        tok = self.dim_emb(dim_idx) + self.lvl_emb(lvl_idx)  # [K, emb]
-        tok = self.in_proj(tok)                              # [K, hid]
-        tok = tok.unsqueeze(0).repeat(B, 1, 1)               # [B, K, hid]
+        # token embeddings, takes the dim and level indices, converts up to hid
+        tok = self.dimension_embedding(dim_idx) + self.bit_level_embedding(lvl_idx)  # [K, embedding_dim]
+        tok = self.embedding_proj(tok)  # [K, hidden_dim]
+        tok = tok.unsqueeze(0).repeat(B, 1, 1)  # [B, K, hid]
 
-        cond_bias = self.cond_proj(cond).unsqueeze(1)        # [B, 1, hid]
-        x = tok + cond_bias                                  # broadcast to all K
+        # condition projection up to hidden_dim (same as tok dim) in order to combine
+        conditional_bias = self.conditional_proj(cond).unsqueeze(1)  # [B, 1, hidden_dim]
+        x = tok + conditional_bias  # broadcast to all K so that [B, K, hidden_dim]
 
-        h, _ = self.gru(x)                                   # [B, K, hid]
-        logits = self.head(h)                                # [B, K, M]
+        # run through GRU
+        h, _ = self.gru(x)  # [B, K, hidden_dim]
+
+        # Run through MLP head to get Mixture weights
+        logits = self.head(h)  # [B, K, M]
         alpha = F.softmax(logits, dim=-1)
         return alpha, h
 
@@ -102,11 +108,12 @@ class QTTGenerator(nn.Module):
         L = N.bit_length() - 1
         self.d, self.N, self.L, self.K = d, N, L, d * L
         self.bank = QTTCoreBank(r=r, M=M, orth_penalty=orth_penalty)
-        self.seq = QTTSeq(d, L, cond_dim=cond_dim, emb=128, hid=256, M=M, num_layers=2, dropout=0.1)
+        self.seq = QTTSeq(d, L, conditional_dim=cond_dim, embedding_dim=128, hidden_dim=256, M=M, num_layers=2,
+                          dropout=0.1)
 
     def forward_sampled(self, cond, bits):
         """
-        cond: [B, cond_dim]
+        cond: [B, conditional_dim]
         bits: [B, S, K] with 0/1 entries per sampled index
         returns: [B, S] predicted scalar values
         """

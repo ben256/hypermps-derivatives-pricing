@@ -95,7 +95,7 @@ def train_hypernetwork(
         # Oracle batch
         B = batch_size
         cond_params, params_list = sample_mixture_params_batch(B, d, n_components, rng)
-        params = cond_params.to(device, dtype=torch.float32)  # [B, cond_dim]
+        params = cond_params.to(device, dtype=torch.float32)  # [B, conditional_dim]
 
         bits = torch.randint(0, 2, (B, S, K), device=device, dtype=torch.long)
         pred = model.forward_sampled(params, bits)  # [B,S]
@@ -160,7 +160,7 @@ def train_hypernetwork(
     with torch.no_grad():
         cols = 4
         cond_params_plot, params_list_plot = sample_mixture_params_batch(cols, d, n_components, rng)
-        params_plot = cond_params_plot.to(device, dtype=torch.float32)  # [4,cond_dim]
+        params_plot = cond_params_plot.to(device, dtype=torch.float32)  # [4,conditional_dim]
 
         center = N // 2
         fig = plt.figure(figsize=(4 * cols, 3 * d))
