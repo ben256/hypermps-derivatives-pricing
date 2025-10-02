@@ -72,10 +72,10 @@ class RelationBias(nn.Module):
         super().__init__()
         # learned weights per head for each relation
         self.w_same_dim  = nn.Parameter(torch.zeros(n_heads))   # encourages cores within same dimension
-        # self.w_same_lvl  = nn.Parameter(torch.zeros(n_heads))   # encourages cores at same level
-        # self.w_adj_lvl   = nn.Parameter(torch.zeros(n_heads))   # encourages |lvl_i - lvl_j| == 1
+        self.w_same_lvl  = nn.Parameter(torch.zeros(n_heads))   # encourages cores at same level
+        self.w_adj_lvl   = nn.Parameter(torch.zeros(n_heads))   # encourages |lvl_i - lvl_j| == 1
         # # optional: distance decay on level differences (smooth bias)
-        # self.w_lvl_dist  = nn.Parameter(torch.zeros(n_heads))   # multiplies a normalized distance kernel
+        self.w_lvl_dist  = nn.Parameter(torch.zeros(n_heads))   # multiplies a normalized distance kernel
 
     def forward(self, dim_idx, lvl_idx):
         """
@@ -84,26 +84,26 @@ class RelationBias(nn.Module):
         """
         K = dim_idx.numel()
         di = dim_idx.view(1, K)
-        # li = lvl_idx.view(1, K)
+        li = lvl_idx.view(1, K)
 
         same_dim = (di.T == di).float()         # [K,K]
-        # same_lvl = (li.T == li).float()         # [K,K]
-        # adj_lvl  = (li.T - li).abs().eq(1).float()
+        same_lvl = (li.T == li).float()         # [K,K]
+        adj_lvl  = (li.T - li).abs().eq(1).float()
 
-        # # level distance kernel in [0,1], 1 on diag, decays with |Δ|
-        # d = (li.T - li).abs().float()
+        # level distance kernel in [0,1], 1 on diag, decays with |Δ|
+        d = (li.T - li).abs().float()
         # normalize to [0,1] by L-1 when L>1; if L==1, kernel is ones
-        # Lm1 = max(int(lvl_idx.max().item()), 0)
-        # lvl_kernel = torch.ones_like(d) if Lm1 == 0 else 1.0 - (d / (Lm1 + 1e-6))
+        Lm1 = max(int(lvl_idx.max().item()), 0)
+        lvl_kernel = torch.ones_like(d) if Lm1 == 0 else 1.0 - (d / (Lm1 + 1e-6))
 
         # stack per relation, then weight per head
         # shape to [1,K,K] then broadcast to [nH,K,K]
         def w_expand(w): return w.view(-1, 1, 1)
         bias = (
-                w_expand(self.w_same_dim) * same_dim.unsqueeze(0)# +
-                # w_expand(self.w_same_lvl) * same_lvl.unsqueeze(0) +
-                # w_expand(self.w_adj_lvl)  * adj_lvl.unsqueeze(0) +
-                # w_expand(self.w_lvl_dist) * lvl_kernel.unsqueeze(0)
+                w_expand(self.w_same_dim) * same_dim.unsqueeze(0) +
+                w_expand(self.w_same_lvl) * same_lvl.unsqueeze(0) +
+                w_expand(self.w_adj_lvl)  * adj_lvl.unsqueeze(0) +
+                w_expand(self.w_lvl_dist) * lvl_kernel.unsqueeze(0)
         )
         return bias  # [nH, K, K]
 
