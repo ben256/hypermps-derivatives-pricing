@@ -62,7 +62,11 @@ def train_hypernetwork(
     random.seed(seed)
 
     rng = np.random.default_rng(seed)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
+    if device.type != 'mps':
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    logger.info(f"Using device: {device}")
 
     k = int(math.log2(N))
     assert (1 << k) == N, "N must be a power of 2"
@@ -100,17 +104,22 @@ def train_hypernetwork(
         bits = torch.randint(0, 2, (B, S, K), device=device, dtype=torch.long)
         pred = model.forward_sampled(params, bits)  # [B,S]
 
-        idx_nd = bits_to_idx_nd(bits, d=d, N=N)  # [B,S,d]
+        if output_space == "log":
+            pred_for_loss = torch.log(pred.clamp_min(1e-12))
+        else:
+            pred_for_loss = pred
+
+        idx_nd = bits_to_idx_nd(bits, d=d, N=N)  # [B, S, d]
         y_true = mixture_oracle_ytrue(idx_nd, grid, params_list, output_space=output_space)
 
-        loss = F.mse_loss(pred, y_true) + model.orth_loss()
+        loss = F.mse_loss(pred_for_loss, y_true) + model.orth_loss()
 
         optimiser.zero_grad(set_to_none=True)
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimiser.step()
 
-        if (step % 250) == 0:
+        if (step % 100) == 0:
             logger.info(f"step {step}/{steps}  loss={loss.item():.6f}")
         step += 1
 
@@ -128,12 +137,15 @@ def train_hypernetwork(
                     params_v = cond_params_v.to(device, dtype=torch.float32)
 
                     idx_flat_sel = select_validation_indices(N, d, device, val_max_points)  # [Ssel]
-                    idx_nd_sel = flat_to_idx_nd(idx_flat_sel, d, N)  # [Ssel,d]
-                    idx_nd_b = idx_nd_sel.unsqueeze(0).expand(Bv, -1, -1).contiguous()  # [Bv,Ssel,d]
-                    bits_v = idx_nd_to_bits(idx_nd_b, d=d, N=N)  # [Bv,Ssel,K]
+                    idx_nd_sel = flat_to_idx_nd(idx_flat_sel, d, N)  # [Ssel, d]
+                    idx_nd_b = idx_nd_sel.unsqueeze(0).expand(Bv, -1, -1).contiguous()  # [Bv, Ssel,d]
+                    bits_v = idx_nd_to_bits(idx_nd_b, d=d, N=N)  # [Bv, Ssel, K]
 
-                    pred_v = model.forward_sampled(params_v, bits_v)  # [Bv,Ssel]
-                    y_true_v = mixture_oracle_ytrue(idx_nd_b, grid, params_list_v, output_space=output_space)  # [Bv,Ssel]
+                    pred_v = model.forward_sampled(params_v, bits_v)  # [Bv, Ssel]
+                    y_true_v = mixture_oracle_ytrue(idx_nd_b, grid, params_list_v, output_space=output_space)  # [Bv, Ssel]
+
+                    if output_space == "log":
+                        pred_v = torch.log(pred_v.clamp_min(1e-12))
 
                     diff = pred_v - y_true_v
                     sum_se += (diff.pow(2)).sum().item()
@@ -185,6 +197,9 @@ def train_hypernetwork(
                     idx_nd_slice, grid, [params_list_plot[c]], output_space=output_space
                 ).squeeze(0).detach().cpu().numpy()
 
+                if output_space == "log":
+                    pred_slice = np.log(np.clip(pred_slice, 1e-12, None))
+
                 ax = fig.add_subplot(d, cols, j * cols + c + 1)
                 ax.plot(x_axis, y_true_slice, label="target", lw=2)
                 ax.plot(x_axis, pred_slice, label="pred", lw=2)
@@ -208,14 +223,14 @@ def train_hypernetwork(
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--d', type=int, default=5)
+    parser.add_argument('--d', type=int, default=2)
     parser.add_argument('--N', type=int, default=128)
     parser.add_argument('--max-rank', type=int, default=15)
     parser.add_argument('--basis-cores', type=int, default=8)
     parser.add_argument('--batch-size', type=int, default=100)
     parser.add_argument('--learning-rate', type=float, default=1e-4)
     parser.add_argument('--num-samples', type=int, default=1024)
-    parser.add_argument('--steps', type=int, default=50000)
+    parser.add_argument('--steps', type=int, default=5000)
     parser.add_argument('--n-components', type=int, default=1)
     parser.add_argument('--grid-min', type=float, default=-4.0)
     parser.add_argument('--grid-max', type=float, default=4.0)
@@ -223,7 +238,7 @@ def main():
     parser.add_argument('--output-dir', type=str, default='./output')
     parser.add_argument('--seed', type=int, default=42)
 
-    parser.add_argument('--val-every', type=int, default=25)
+    parser.add_argument('--val-every', type=int, default=1000)
     parser.add_argument('--val-max-points', type=int, default=1024)
     args = parser.parse_args()
 
