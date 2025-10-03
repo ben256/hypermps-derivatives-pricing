@@ -132,8 +132,15 @@ class QTTSeqCondAttn(nn.Module):
     """
     def __init__(
             self,
-            d, L, cond_dim, emb=128, hid=256, M=8,
-            num_layers=4, n_heads=8, dropout=0.1,
+            d,
+            L,
+            cond_dim,
+            emb=128,
+            hid=256,
+            M=8,
+            num_layers=4,
+            n_heads=8,
+            dropout=0.1,
             cond_tokens=4
     ):
         super().__init__()
@@ -213,13 +220,13 @@ class QTTSeqCondAttn(nn.Module):
             h = h + self.ff[i](self.ln3[i](h))
 
         # per-position mixture
-        logits = self.head(h)         # [B, K, M]
+        logits = self.head(h)  # [B, K, M]
         alpha = F.softmax(logits, dim=-1)
         return alpha, h
 
 
 class QTTCoreBank(nn.Module):
-    def __init__(self, r=32, M=8, orth_penalty=1e-4):
+    def __init__(self, r=32, M=8, orth_penalty=5e-5):
         super().__init__()
         # basis cores: [M, 2, r, r]
         self.B = nn.Parameter(torch.randn(M, 2, r, r) / (r**0.5))
@@ -246,93 +253,48 @@ class QTTCoreBank(nn.Module):
         return self.orth_penalty * loss
 
 
-class QTTSeq(nn.Module):
-    """
-    Sequence model that outputs per-core mixture weights alpha_k
-    conditioned on 'cond' of shape [B, conditional_dim].
-    """
-    def __init__(self, d, L, conditional_dim, embedding_dim=128, hidden_dim=256, M=8, num_layers=2, dropout=0.1):
-        super().__init__()
-        self.d, self.L, self.K = d, L, d * L
-        self.conditional_dim = conditional_dim
-        self.M = M
-
-        self.dimension_embedding = nn.Embedding(d, embedding_dim)
-        self.bit_level_embedding = nn.Embedding(L, embedding_dim)
-        self.conditional_proj = nn.Linear(conditional_dim, hidden_dim)
-        self.embedding_proj = nn.Linear(embedding_dim, hidden_dim)
-        self.gru = nn.GRU(hidden_dim, hidden_dim, num_layers=num_layers, dropout=dropout, batch_first=True)
-        self.head = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, M)
-        )
-
-        # precompute token indices once
-        # interleaved by dimension then level, can be the other way round depending on induction bias preference (whatever that means)
-        tokens = []
-        for j in range(d):
-            for l in range(L):
-                tokens.append((j, l))
-        self.register_buffer(
-            "dim_idx_cpu", torch.tensor([t[0] for t in tokens], dtype=torch.long),
-            persistent=False
-        )
-        self.register_buffer(
-            "lvl_idx_cpu", torch.tensor([t[1] for t in tokens], dtype=torch.long),
-            persistent=False
-        )
-
-    def forward(self, cond):
-        """
-        cond: [B, conditional_dim]
-        returns:
-          alpha: [B, K, M] mixture per position
-          h:     [B, K, hidden_dim] hidden states (for optional readouts)
-        """
-        B = cond.size(0)
-        device = cond.device
-
-        dim_idx = self.dim_idx_cpu.to(device)
-        lvl_idx = self.lvl_idx_cpu.to(device)
-
-        # token embeddings, takes the dim and level indices, converts up to hid
-        tok = self.dimension_embedding(dim_idx) + self.bit_level_embedding(lvl_idx)  # [K, embedding_dim]
-        tok = self.embedding_proj(tok)  # [K, hidden_dim]
-        tok = tok.unsqueeze(0).repeat(B, 1, 1)  # [B, K, hid]
-
-        # condition projection up to hidden_dim (same as tok dim) in order to combine
-        conditional_bias = self.conditional_proj(cond).unsqueeze(1)  # [B, 1, hidden_dim]
-        x = tok + conditional_bias  # broadcast to all K so that [B, K, hidden_dim]
-
-        # run through GRU
-        h, _ = self.gru(x)  # [B, K, hidden_dim]
-
-        # Run through MLP head to get Mixture weights
-        logits = self.head(h)  # [B, K, M]
-        alpha = F.softmax(logits, dim=-1)
-        return alpha, h
-
-
 class QTTGenerator(nn.Module):
     """
     produces dense outputs atm, need to update to do sampled contraction loss apparently
     """
-    def __init__(self, d=5, N=128, r=32, M=8, cond_dim=0, orth_penalty=1e-4):
+    def __init__(
+            self,
+            d=5,
+            N=128,
+            r=32,
+            M=8,
+            cond_dim=0,
+            embedding_dim=128,
+            hidden_dim=256,
+            num_layers=4,
+            n_heads=8,
+            dropout=0.1,
+            cond_tokens=4,
+            orth_penalty=1e-4
+    ):
         super().__init__()
         assert (N & (N - 1)) == 0, "N must be a power of 2"
         L = N.bit_length() - 1
         self.d, self.N, self.L, self.K = d, N, L, d * L
+        self.r = r
         self.bank = QTTCoreBank(r=r, M=M, orth_penalty=orth_penalty)
-        # self.seq = QTTSeq(d, L, conditional_dim=cond_dim, embedding_dim=128, hidden_dim=256, M=M, num_layers=2,
-        #                   dropout=0.1)
-
         self.seq = QTTSeqCondAttn(
-            d, L, cond_dim=cond_dim,
-            emb=128, hid=256, M=M,
-            num_layers=4, n_heads=8, dropout=0.1,
-            cond_tokens=4,    # 2–8 is typical
+            d,
+            L,
+            cond_dim=cond_dim,
+            emb=embedding_dim,
+            hid=hidden_dim,
+            M=M,
+            num_layers=num_layers,
+            n_heads=n_heads,
+            dropout=dropout,
+            cond_tokens=cond_tokens,
         )
+
+        # TT boundary vectors as trainable parameters
+        scale = (r ** -0.5)
+        self.u = nn.Parameter(torch.ones(r) * scale)
+        self.v = nn.Parameter(torch.ones(r) * scale)
 
     def forward_sampled(self, cond, bits):
         """
@@ -353,10 +315,6 @@ class QTTGenerator(nn.Module):
         g0 = g0.view(B, K, r, r)
         g1 = g1.view(B, K, r, r)
 
-        if not hasattr(self, "u"):
-            self.u = torch.nn.Parameter(torch.ones(r, device=device) / r**0.5)
-            self.v = torch.nn.Parameter(torch.ones(r, device=device) / r**0.5)
-
         # contraction
         L = self.u.view(1, 1, 1, r).expand(B, S, 1, r).contiguous()  # [B, S, 1, r]
         for k in range(K):
@@ -365,17 +323,20 @@ class QTTGenerator(nn.Module):
             gk0 = g0[:, k]  # [B, r, r]
             gk1 = g1[:, k]  # [B, r, r]
             bk = bits[:, :, k]  # [B, S]
-            # Gather: stack [B,2,r,r] then take index per (B,S)
-            Gk = torch.stack([gk0, gk1], dim=1)  # [B, 2, r, r]
-            # Convert bk to indices: [B,S] -> gather across dim=1
-            # Build [B,S,r,r] by advanced indexing
-            Gk_sel = Gk.gather(1, bk.unsqueeze(-1).unsqueeze(-1).expand(B, S, r, r))
+
+            Gk_sel = torch.where(
+                bk.unsqueeze(-1).unsqueeze(-1).bool(),
+                gk1.unsqueeze(1),  # [B,1,r,r] -> [B,S,r,r]
+                gk0.unsqueeze(1),  # [B,1,r,r] -> [B,S,r,r]
+            )
             # Multiply: [B,S,1,r] x [B,S,r,r] -> [B,S,1,r]
             L = torch.matmul(L, Gk_sel)
 
         # Finish with right boundary
         out = torch.matmul(L, self.v.view(1, 1, r, 1))  # [B,S,1,1]
-        return out.view(B, S)
+
+        out = torch.nn.functional.softplus(out, beta=1.0)  # [B,S,1,1]
+        return out.view(B, S)  # [B,S]
 
     def orth_loss(self):
         return self.bank.orth_loss()

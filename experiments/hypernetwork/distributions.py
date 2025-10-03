@@ -1,8 +1,9 @@
 import numpy as np
+from typing import Optional
 from scipy.special import logsumexp
 
 
-def generate_covariance_matrix(rng: np.random.Generator, d: int, correlation: float = None):
+def generate_covariance_matrix(rng: np.random.Generator, d: int, correlation: Optional[float] = None):
     stds = rng.uniform(0.1, 1.0, size=d)
     corr_matrix = np.full((d, d), correlation if correlation is not None else 0.0)
     np.fill_diagonal(corr_matrix, 1.0)

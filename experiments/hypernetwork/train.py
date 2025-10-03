@@ -8,6 +8,7 @@ import numpy as np
 import torch
 from torch import nn, optim
 import torch.nn.functional as F
+from torch.optim.lr_scheduler import LambdaLR
 from matplotlib import pyplot as plt
 
 from model import QTTGenerator
@@ -35,14 +36,29 @@ def select_validation_indices(N: int, d: int, device: torch.device, max_points: 
     return torch.tensor(sel, dtype=torch.long, device=device)
 
 
+def build_linear_warmup_scheduler(optimizer, warmup_steps: int):
+    # scale factor for step t (0-based) -> in (0, 1] during warmup, then 1.0
+    if warmup_steps <= 0:
+        return LambdaLR(optimizer, lr_lambda=lambda step: 1.0)
+    def lr_lambda(step: int):
+        return float(min(step + 1, warmup_steps)) / float(warmup_steps)
+    return LambdaLR(optimizer, lr_lambda=lr_lambda)
+
+
 def train_hypernetwork(
         d: int,
         N: int,
         basis_cores: int,
         max_rank: int,
+        embedding_dim: int,
+        hidden_dim: int,
+        cond_tokens: int,
+        orth_penalty: float,
         batch_size: int,
         learning_rate: float,
         steps: int,
+        warmup_steps: int,
+        weight_decay: float,
         output_dir: str,
         seed: int,
         num_samples: int = 2048,
@@ -52,6 +68,10 @@ def train_hypernetwork(
         output_space: str = "log",
         val_every: int = 1000,
         val_max_points: int = 262144,
+        # Newly exposed model hyperparameters
+        num_layers: int = 4,
+        n_heads: int = 8,
+        dropout: float = 0.1,
 ):
 
     output_dir = create_recursive_folder(output_dir, 'training')
@@ -77,16 +97,44 @@ def train_hypernetwork(
     # conditioning dimension implied by oracle mixture params
     cond_dim = mixture_cond_len(d, n_components)
 
+    # Build model with fully configurable hyperparameters
     model = QTTGenerator(
         d=d,
         N=N,
         r=max_rank,
         M=basis_cores,
         cond_dim=cond_dim,
-        orth_penalty=1e-4
+        embedding_dim=embedding_dim,
+        hidden_dim=hidden_dim,
+        num_layers=num_layers,
+        n_heads=n_heads,
+        dropout=dropout,
+        cond_tokens=cond_tokens,
+        orth_penalty=orth_penalty,
     ).to(device)
 
-    optimiser = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
+    # Log full model hyperparameter configuration
+    model_cfg = {
+        'd': d,
+        'N': N,
+        'K=d*log2(N)': K,
+        'max_rank (r)': max_rank,
+        'basis_cores (M)': basis_cores,
+        'embedding_dim': embedding_dim,
+        'hidden_dim': hidden_dim,
+        'num_layers': num_layers,
+        'n_heads': n_heads,
+        'dropout': dropout,
+        'cond_tokens': cond_tokens,
+        'orth_penalty': orth_penalty,
+        'cond_dim (derived)': cond_dim,
+    }
+    num_params = sum(p.numel() for p in model.parameters())
+    logger.info("Model configuration: " + ", ".join([f"{k}={v}" for k, v in model_cfg.items()]))
+    logger.info(f"Total trainable parameters: {num_params:,}")
+
+    optimiser = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    scheduler = build_linear_warmup_scheduler(optimiser, warmup_steps)
 
     logger.info(f"Starting training | d={d} N={N} k={k} K={K} S={S} max_rank={max_rank} basis_cores={basis_cores} "
                 f"batch_size={batch_size} lr={learning_rate} steps={steps} n_components={n_components} "
@@ -94,15 +142,15 @@ def train_hypernetwork(
 
     step = 0
     model.train()
+    B = batch_size
 
     while step < steps:
         # Oracle batch
-        B = batch_size
         cond_params, params_list = sample_mixture_params_batch(B, d, n_components, rng)
         params = cond_params.to(device, dtype=torch.float32)  # [B, conditional_dim]
 
         bits = torch.randint(0, 2, (B, S, K), device=device, dtype=torch.long)
-        pred = model.forward_sampled(params, bits)  # [B,S]
+        pred = model.forward_sampled(params, bits)  # [B, S]
 
         if output_space == "log":
             pred_for_loss = torch.log(pred.clamp_min(1e-12))
@@ -118,6 +166,7 @@ def train_hypernetwork(
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimiser.step()
+        scheduler.step()
 
         if (step % 100) == 0:
             logger.info(f"step {step}/{steps}  loss={loss.item():.6f}")
@@ -180,6 +229,7 @@ def train_hypernetwork(
         x_axis = grid.detach().cpu().numpy()
         ylabel = "log-density" if output_space == "log" else "density"
 
+        last_ax = None
         for c in range(cols):
             for j in range(d):
                 # build indices for a slice varying dimension j
@@ -209,9 +259,11 @@ def train_hypernetwork(
                     ax.set_ylabel(ylabel)
                 if j == 0:
                     ax.set_title(f"sample {c}")
+                last_ax = ax
         # only one legend for the whole figure
-        handles, labels = ax.get_legend_handles_labels()
-        fig.legend(handles, labels, loc='upper right')
+        if last_ax is not None:
+            handles, labels = last_ax.get_legend_handles_labels()
+            fig.legend(handles, labels, loc='upper right')
         fig.tight_layout(rect=(0, 0, 0.98, 1))
         out_path = os.path.join(output_dir, f"final_4x{d}_slices.png")
         plt.savefig(out_path, dpi=150)
@@ -226,14 +278,23 @@ def main():
     parser.add_argument('--d', type=int, default=2)
     parser.add_argument('--N', type=int, default=128)
     parser.add_argument('--max-rank', type=int, default=15)
-    parser.add_argument('--basis-cores', type=int, default=8)
+    parser.add_argument('--basis-cores', type=int, default=14)
+    parser.add_argument('--embedding-dim', type=int, default=128)
+    parser.add_argument('--hidden-dim', type=int, default=256)
+    parser.add_argument('--num-layers', type=int, default=4)
+    parser.add_argument('--n-heads', type=int, default=8)
+    parser.add_argument('--dropout', type=float, default=0.1)
+    parser.add_argument('--cond-tokens', type=int, default=4)
+    parser.add_argument('--orth-penalty', type=float, default=1e-4)
     parser.add_argument('--batch-size', type=int, default=100)
     parser.add_argument('--learning-rate', type=float, default=1e-4)
     parser.add_argument('--num-samples', type=int, default=1024)
     parser.add_argument('--steps', type=int, default=5000)
+    parser.add_argument("--warmup-steps", type=int, default=1000)
+    parser.add_argument("--weight-decay", type=float, default=0.0001)
     parser.add_argument('--n-components', type=int, default=1)
-    parser.add_argument('--grid-min', type=float, default=-4.0)
-    parser.add_argument('--grid-max', type=float, default=4.0)
+    parser.add_argument('--grid-min', type=float, default=-3.0)
+    parser.add_argument('--grid-max', type=float, default=3.0)
     parser.add_argument('--output-space', type=str, choices=['log', 'density'], default='log')
     parser.add_argument('--output-dir', type=str, default='./output')
     parser.add_argument('--seed', type=int, default=42)
@@ -246,11 +307,17 @@ def main():
         d=args.d,
         N=args.N,
         basis_cores=args.basis_cores,
+        embedding_dim=args.embedding_dim,
+        hidden_dim=args.hidden_dim,
+        cond_tokens=args.cond_tokens,
+        orth_penalty=args.orth_penalty,
         max_rank=args.max_rank,
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
         num_samples=args.num_samples,
         steps=args.steps,
+        warmup_steps=args.warmup_steps,
+        weight_decay=args.weight_decay,
         n_components=args.n_components,
         output_space=args.output_space,
         grid_min=args.grid_min,
@@ -259,6 +326,9 @@ def main():
         seed=args.seed,
         val_every=args.val_every,
         val_max_points=args.val_max_points,
+        num_layers=args.num_layers,
+        n_heads=args.n_heads,
+        dropout=args.dropout,
     )
 
 
