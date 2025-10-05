@@ -84,7 +84,7 @@ def train_hypernetwork(
     rng = np.random.default_rng(seed)
     device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
     if device.type != 'mps':
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.So .is_available() else 'cpu')
 
     logger.info(f"Using device: {device}")
 
@@ -160,7 +160,8 @@ def train_hypernetwork(
         idx_nd = bits_to_idx_nd(bits, d=d, N=N)  # [B, S, d]
         y_true = mixture_oracle_ytrue(idx_nd, grid, params_list, output_space=output_space)
 
-        loss = F.mse_loss(pred_for_loss, y_true) + model.orth_loss()
+        # loss = F.mse_loss(pred_for_loss, y_true) + model.orth_loss()
+        loss = F.smooth_l1_loss(pred_for_loss, y_true, beta=0.1) + model.orth_loss()
 
         optimiser.zero_grad(set_to_none=True)
         loss.backward()
@@ -275,10 +276,10 @@ def train_hypernetwork(
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--d', type=int, default=2)
+    parser.add_argument('--d', type=int, default=5)
     parser.add_argument('--N', type=int, default=128)
     parser.add_argument('--max-rank', type=int, default=15)
-    parser.add_argument('--basis-cores', type=int, default=14)
+    parser.add_argument('--basis-cores', type=int, default=12)
     parser.add_argument('--embedding-dim', type=int, default=128)
     parser.add_argument('--hidden-dim', type=int, default=256)
     parser.add_argument('--num-layers', type=int, default=4)

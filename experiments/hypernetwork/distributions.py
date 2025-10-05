@@ -28,6 +28,7 @@ def gaussian_logpdf(
 ):
     diff = x - mu.reshape(-1, 1)
     quad = np.einsum('ib,ij,jb->b', diff, cov_inv, diff)
+    test = log_norm_const - 0.5 * quad
     return log_norm_const - 0.5 * quad
 
 
@@ -43,6 +44,7 @@ def mixture_logpdf(
     logs = np.empty((M, B), dtype=np.float64)
     for m in range(M):
         logs[m] = np.log(weights[m]) + gaussian_logpdf(x, means[m], covs_inv[m], log_norms[m])
+    test2 = logsumexp(logs, axis=0)
     return logsumexp(logs, axis=0)
 
 

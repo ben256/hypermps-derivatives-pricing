@@ -22,7 +22,7 @@ def eval_tt(tt_cores, x_indices):
 
 
 def eval_btt(btt_cores, x_indices, N):
-    """Evaluates a BTT at given indices."""
+    """Evaluates a QTT at given indices."""
     k = int(np.log2(N))
     binary_indices = []
     for idx in x_indices:
@@ -79,7 +79,7 @@ def train(
         N: int = 64,
         correlation: float = 0.3,
         max_rank: int = 20,
-        format: str = 'BTT',
+        format: str = 'QTT',
 
         batch_size: int = 200,
         learning_rate: float = 5e-6,
@@ -119,7 +119,7 @@ def train(
         domain = [torch.arange(N, device=device) for _ in range(d)]
         ranks = [max_rank] * (d - 1)
         n_model = N
-    elif format == 'BTT':
+    elif format == 'QTT':
         k = int(np.log2(N))
         n_model = 2
         domain = [torch.arange(2, device=device) for _ in range(d * k)]
@@ -180,7 +180,7 @@ def train(
                 tt_cores = model(params)
                 if format == 'TT':
                     output = [eval_tt(tt_cores, [i]*d) for i in range(N)]
-                elif format == 'BTT':
+                elif format == 'QTT':
                     output = torch.stack([eval_btt(tt_cores, [i]*d, N) for i in range(N)]).squeeze().T
 
                 loss = criterion(output, target)
@@ -209,7 +209,7 @@ def train(
                     tt_cores = model(params)
                     if format == 'TT':
                         output = [eval_tt(tt_cores, [i]*d) for i in range(N)]
-                    elif format == 'BTT':
+                    elif format == 'QTT':
                         output = torch.stack([eval_btt(tt_cores, [i]*d, N) for i in range(N)]).squeeze().T
                     loss = criterion(output, target)
 
@@ -257,10 +257,10 @@ def train(
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--d', type=int, default=4)
-    parser.add_argument('--N', type=int, default=64)
+    parser.add_argument('--d', type=int, default=5)
+    parser.add_argument('--N', type=int, default=128)
     parser.add_argument('--correlation', type=float, default=0.3)
-    parser.add_argument('--format', type=str, choices=['TT', 'BTT'], default='BTT')
+    parser.add_argument('--format', type=str, choices=['TT', 'QTT'], default='QTT')
 
     parser.add_argument('--batch-size', type=int, default=200)
     parser.add_argument('--learning-rate', type=float, default=1e-5)

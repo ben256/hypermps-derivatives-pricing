@@ -4,6 +4,7 @@ import json
 import numpy as np
 import tntorch as tn
 import torch
+from scipy.special import logsumexp
 from tqdm import tqdm
 
 from train.utils import create_recursive_folder
@@ -226,7 +227,7 @@ if __name__ == '__main__':
     parser.add_argument('--n-samples', type=int, default=100000)
     parser.add_argument('--d', type=int, default=5)
     parser.add_argument('--N', type=int, default=128)
-    parser.add_argument('--max-rank', type=int, default=10)
+    parser.add_argument('--max-rank', type=int, default=16)
     parser.add_argument('--dataset-path', type=str, default='../data/datasets')
     parser.add_argument('--correlation', type=float, default=0.5)
     parser.add_argument('--format', type=str, choices=['TT', 'QTT'], default='QTT')

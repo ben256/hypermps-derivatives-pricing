@@ -236,8 +236,8 @@ class QTTCoreBank(nn.Module):
         # weighted sum over basis per batch
         # B: [M, 2, r, r], alpha: [B, M]
         # out for bit=0: [B, r, r]
-        g0 = torch.einsum('bm,mij->bij', alpha, self.B[:,0])
-        g1 = torch.einsum('bm,mij->bij', alpha, self.B[:,1])
+        g0 = torch.einsum('bm,mij->bij', alpha, self.B[:, 0, :, :])
+        g1 = torch.einsum('bm,mij->bij', alpha, self.B[:, 1, :, :])
         return g0, g1
 
     def orth_loss(self):
@@ -320,7 +320,7 @@ class QTTGenerator(nn.Module):
         for k in range(K):
             # Select G_k^{(b)} for each (B,S)
             # g_sel: [B, S, r, r]
-            gk0 = g0[:, k]  # [B, r, r]
+            gk0 = g0[:, k, :, :]  # [B, r, r]
             gk1 = g1[:, k]  # [B, r, r]
             bk = bits[:, :, k]  # [B, S]
 

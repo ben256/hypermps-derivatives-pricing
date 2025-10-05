@@ -14,7 +14,7 @@ from distributions import (
 )
 
 
-RUN_TTCROSS = False
+RUN_TTCROSS = True
 
 
 def renormalize_logpdf_on_grid(
@@ -149,7 +149,7 @@ def create_datasets(
                     raise ValueError(f"[TT-CROSS] Unsupported distribution {distribution}")
 
                 domain = [torch.arange(2, device=device) for _ in range(D)]
-                max_rank_tt = 16
+                max_rank_tt = 15
                 ranks_tt = [min(max_rank_tt, 1 << min(i + 1, D - (i + 1))) for i in range(D - 1)]
 
                 # Run TT-cross
@@ -164,21 +164,21 @@ def create_datasets(
                     device=device,
                 )
 
-                # # Save TT cores for reference
-                # tt_folder = create_recursive_folder(dataset_path, 'tt_refs')
-                # cores_cpu = [core.detach().cpu().to(torch.float32) for core in tt_tensor.cores]
-                # torch.save(
-                #     {
-                #         "cores": cores_cpu,
-                #         "ranks": tt_tensor.ranks,
-                #         "N": N,
-                #         "d": d,
-                #         "distribution": distribution,
-                #         "sample_index": n,
-                #         "seed": seed,
-                #     },
-                #     f"{tt_folder}/cores_{distribution}_d{d}_N{N}_idx{n:06d}.pt",
-                # )
+                # Save TT cores for reference
+                tt_folder = create_recursive_folder(dataset_path, 'tt_refs')
+                cores_cpu = [core.detach().cpu().to(torch.float32) for core in tt_tensor.cores]
+                torch.save(
+                    {
+                        "cores": cores_cpu,
+                        "ranks": tt_tensor.ranks,
+                        "N": N,
+                        "d": d,
+                        "distribution": distribution,
+                        "sample_index": n,
+                        "seed": seed,
+                    },
+                    f"{tt_folder}/cores_{distribution}_d{d}_N{N}_idx{n:06d}.pt",
+                )
 
         params_t = torch.from_numpy(params).to(device)
 
@@ -228,13 +228,13 @@ def create_datasets(
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--n-samples', type=int, default=10000)
-    parser.add_argument('--d', type=int, default=2)
+    parser.add_argument('--d', type=int, default=5)
     parser.add_argument('--N', type=int, default=128)
     parser.add_argument('--dataset-path', type=str, default='./datasets')
     parser.add_argument('--correlation', type=float, default=0.5)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--device', type=str, default='cpu')
-    parser.add_argument('--distribution', type=str, choices=['gaussian', 'mixture1d', 'mixture2d'], default='mixture2d')
+    parser.add_argument('--distribution', type=str, choices=['gaussian', 'mixture1d', 'mixture2d'], default='mixture1d')
     parser.add_argument('--n-components', type=int, default=1)
     parser.add_argument('--grid-min', type=float, default=-4.0)
     parser.add_argument('--grid-max', type=float, default=4.0)
