@@ -220,7 +220,7 @@ def main():
 
     # Training parameters
     parser.add_argument('--batch-size', type=int, default=64)
-    parser.add_argument('--n-training-steps', type=int, default=200-00)
+    parser.add_argument('--n-training-steps', type=int, default=20000)
     parser.add_argument('--n-warmup-steps', type=int, default=1000)
     parser.add_argument('--learning-rate', type=float, default=3e-4)
     parser.add_argument('--n-train-samples', type=int, default=512)
