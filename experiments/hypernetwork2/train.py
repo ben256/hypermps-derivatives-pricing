@@ -216,14 +216,14 @@ def main():
     parser.add_argument('--n-layers', type=int, default=4)
     parser.add_argument('--n-heads', type=int, default=8)
     parser.add_argument('--dropout', type=float, default=0.1)
-    parser.add_argument('--conditioning-tokens', type=int, default=8)
+    parser.add_argument('--conditioning-tokens', type=int, default=4)
 
     # Training parameters
     parser.add_argument('--batch-size', type=int, default=64)
-    parser.add_argument('--n-training-steps', type=int, default=20000)
+    parser.add_argument('--n-training-steps', type=int, default=200-00)
     parser.add_argument('--n_warmup_steps', type=int, default=1000)
     parser.add_argument('--learning-rate', type=float, default=3e-4)
-    parser.add_argument('--n_train_samples', type=int, default=512)
+    parser.add_argument('--n-train-samples', type=int, default=512)
 
     # General parameters
     parser.add_argument('--output-dir', type=str, default='./output')
