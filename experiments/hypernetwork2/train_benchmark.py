@@ -186,25 +186,25 @@ if __name__ == '__main__':
     # Grid and problem parameters
     parser.add_argument('--N', type=int, default=128)
     parser.add_argument('--d', type=int, default=5)
-    parser.add_argument('--grid_min', type=float, default=-4.0)
-    parser.add_argument('--grid_max', type=float, default=4.0)
+    parser.add_argument('--grid-min', type=float, default=-4.0)
+    parser.add_argument('--grid-max', type=float, default=4.0)
 
     # Model architecture
     parser.add_argument('--r', type=int, default=16)
-    parser.add_argument('--hidden_size', type=int, default=256)
-    parser.add_argument('--num_layers', type=int, default=3)
+    parser.add_argument('--hidden-size', type=int, default=256)
+    parser.add_argument('--num-layers', type=int, default=3)
     parser.add_argument('--dropout', type=float, default=0.1)
-    parser.add_argument('--decoder_type', type=str, default='shared', choices=['core', 'dimension', 'shared'])
+    parser.add_argument('--decoder-type', type=str, default='dimension', choices=['core', 'dimension', 'shared'])
 
     # Training parameters
-    parser.add_argument('--batch_size', type=int, default=64)
-    parser.add_argument('--n_training_steps', type=int, default=20000)
-    parser.add_argument('--n_warmup_steps', type=int, default=500)
-    parser.add_argument('--learning_rate', type=float, default=3e-4)
-    parser.add_argument('--n_train_samples', type=int, default=1024)
+    parser.add_argument('--batch-size', type=int, default=64)
+    parser.add_argument('--n-training-steps', type=int, default=20000)
+    parser.add_argument('--n-warmup-steps', type=int, default=500)
+    parser.add_argument('--learning-rate', type=float, default=3e-4)
+    parser.add_argument('--n-train-samples', type=int, default=1024)
 
     # System parameters
-    parser.add_argument('--output_dir', type=str, default='./output')
+    parser.add_argument('--output-dir', type=str, default='./output')
     parser.add_argument('--seed', type=int, default=42)
 
     args = parser.parse_args()
