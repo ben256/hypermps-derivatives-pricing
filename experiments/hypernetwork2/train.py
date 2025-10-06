@@ -83,7 +83,7 @@ def train(
 
     optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
     warmup = LambdaLR(optimizer, lambda step: min((step + 1) / max(1, n_warmup_steps), 1.0))
-    cosine = CosineAnnealingLR(optimizer, T_max=max(1, n_training_steps - n_warmup_steps), eta_min=1e-5)
+    cosine = CosineAnnealingLR(optimizer, T_max=max(1, n_training_steps - n_warmup_steps), eta_min=3e-5)
     scheduler = SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[n_warmup_steps])
 
     logger.info(f'Training parameters:')
@@ -172,7 +172,7 @@ def train(
         N=N,
         device=device,
         rng=rng,
-        n_test_samples=n_train_samples,
+        n_test_samples=1000,
         n_test_distributions=100,
     )
 
@@ -211,10 +211,10 @@ def main():
     parser.add_argument('--r', type=int, default=16)
     parser.add_argument('--M', type=int, default=8)
     parser.add_argument('--orth-penalty', type=float, default=1e-5)
-    parser.add_argument('--embedding-dim', type=int, default=128)
-    parser.add_argument('--hidden-dim', type=int, default=256)
-    parser.add_argument('--n-layers', type=int, default=4)
-    parser.add_argument('--n-heads', type=int, default=8)
+    parser.add_argument('--embedding-dim', type=int, default=64)
+    parser.add_argument('--hidden-dim', type=int, default=128)
+    parser.add_argument('--n-layers', type=int, default=2)
+    parser.add_argument('--n-heads', type=int, default=4)
     parser.add_argument('--dropout', type=float, default=0.1)
     parser.add_argument('--conditioning-tokens', type=int, default=4)
 
