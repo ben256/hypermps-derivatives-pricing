@@ -9,22 +9,36 @@ class CoreDecoder(nn.Module):
             self,
             hidden_size: int,
             r: int,
+            num_decoder_layers: int = 1,
     ):
         super().__init__()
         self.r = r
         self.output_size = 2 * r * r  # 2 cores (for bit 0 and bit 1)
 
-        self.fc = nn.Linear(hidden_size, self.output_size)
+        # Add hidden layers for this decoder
+        layers = []
+        in_size = hidden_size
+        for _ in range(num_decoder_layers - 1):
+            layers.append(nn.Linear(in_size, hidden_size))
+            layers.append(nn.ReLU())
+            in_size = hidden_size
+
+        self.hidden = nn.Sequential(*layers) if layers else nn.Identity()
+        self.fc = nn.Linear(in_size, self.output_size)
         self.activation = nn.Tanh()
 
-        nn.init.xavier_uniform_(self.fc.weight)
-        nn.init.zeros_(self.fc.bias)
+        # Initialize weights
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                nn.init.zeros_(m.bias)
 
     def forward(self, x):
         """
         x: [batch_size, hidden_size]
         Returns: g0, g1 each of shape [batch_size, r, r]
         """
+        x = self.hidden(x)
         x = self.fc(x)
         x = self.activation(x)
 
@@ -41,6 +55,7 @@ class DimensionDecoder(nn.Module):
             hidden_size: int,
             r: int,
             L: int,
+            num_decoder_layers: int = 1,
     ):
         """
         Decoder that outputs all L cores for a single dimension.
@@ -49,6 +64,7 @@ class DimensionDecoder(nn.Module):
             hidden_size: size of the hidden representation
             r: TT rank
             L: number of bit levels (cores per dimension)
+            num_decoder_layers: number of hidden layers in this decoder
         """
         super().__init__()
         self.r = r
@@ -56,11 +72,23 @@ class DimensionDecoder(nn.Module):
         # Output 2*L cores (L cores for bit=0, L cores for bit=1)
         self.output_size = 2 * L * r * r
 
-        self.fc = nn.Linear(hidden_size, self.output_size)
+        # Add hidden layers for this decoder
+        layers = []
+        in_size = hidden_size
+        for _ in range(num_decoder_layers - 1):
+            layers.append(nn.Linear(in_size, hidden_size))
+            layers.append(nn.ReLU())
+            in_size = hidden_size
+
+        self.hidden = nn.Sequential(*layers) if layers else nn.Identity()
+        self.fc = nn.Linear(in_size, self.output_size)
         self.activation = nn.Tanh()
 
-        nn.init.xavier_uniform_(self.fc.weight)
-        nn.init.zeros_(self.fc.bias)
+        # Initialize weights
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                nn.init.zeros_(m.bias)
 
     def forward(self, x):
         """
@@ -70,6 +98,7 @@ class DimensionDecoder(nn.Module):
             cores_1: list of L tensors, each [batch_size, r, r] for bit=1
         """
         batch_size = x.size(0)
+        x = self.hidden(x)
         x = self.fc(x)
         x = self.activation(x)
 
@@ -143,6 +172,7 @@ class BenchmarkMPS(nn.Module):
             num_layers: int = 3,
             dropout: float = 0.1,
             decoder_type: str = 'core',  # 'core', 'dimension', or 'shared'
+            num_decoder_layers: int = None,  # Number of hidden layers in each decoder
     ):
         """
         Simple FNN-based MPS model for benchmark comparison.
@@ -153,11 +183,12 @@ class BenchmarkMPS(nn.Module):
             d: dimensionality
             conditioning_dim: dimension of conditioning parameters
             hidden_size: size of hidden layers
-            num_layers: number of hidden layers
+            num_layers: number of hidden layers in the shared encoder
             dropout: dropout rate
             decoder_type: 'core' for one decoder per core (K decoders),
                          'dimension' for one decoder per dimension (d decoders),
                          'shared' for one decoder for all cores (1 decoder)
+            num_decoder_layers: number of hidden layers in each decoder.
         """
         super().__init__()
 
@@ -167,6 +198,10 @@ class BenchmarkMPS(nn.Module):
         self.d = d
         self.L = L
         self.decoder_type = decoder_type
+
+        # Set default num_decoder_layers based on decoder_type if not specified
+        if num_decoder_layers is None:
+            num_decoder_layers = 1  # Single output layer for dimension/shared
 
         # Input layer
         self.fc1 = nn.Linear(conditioning_dim, hidden_size)
@@ -185,20 +220,23 @@ class BenchmarkMPS(nn.Module):
         # Decoders - either per-core, per-dimension, or fully shared
         if decoder_type == 'core':
             # One decoder for each position in the TT chain (K total)
+            # Each decoder has its own hidden layers for maximum expressiveness
             self.core_decoders = nn.ModuleList([
-                CoreDecoder(hidden_size, r) for _ in range(self.K)
+                CoreDecoder(hidden_size, r, num_decoder_layers) for _ in range(self.K)
             ])
             self.dimension_decoders = None
             self.shared_decoder = None
         elif decoder_type == 'dimension':
             # One decoder for each dimension (d total)
+            # Medium sharing: one decoder per dimension
             self.dimension_decoders = nn.ModuleList([
-                DimensionDecoder(hidden_size, r, L) for _ in range(d)
+                DimensionDecoder(hidden_size, r, L, num_decoder_layers) for _ in range(d)
             ])
             self.core_decoders = None
             self.shared_decoder = None
         elif decoder_type == 'shared':
             # One decoder for all cores (1 total)
+            # Maximum sharing: single decoder outputs all cores
             self.shared_decoder = SharedDecoder(hidden_size, r, self.K)
             self.core_decoders = None
             self.dimension_decoders = None
