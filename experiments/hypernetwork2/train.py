@@ -163,7 +163,6 @@ def train(
     torch.save(model.state_dict(), f'{output_dir}/model_final.pth')
     logger.info(f'Model saved to {output_dir}/model_final.pth')
 
-    # Evaluate the trained model
     logger.info('Computing evaluation metrics...')
     eval_metrics = compute_evaluation_metrics(
         model=model,
@@ -186,13 +185,9 @@ def train(
         n_distributions=10,
     )
 
-    # Combine all metrics
     all_metrics = {**eval_metrics, **grid_metrics}
 
-    # Save metrics to file
     save_metrics(all_metrics, f'{output_dir}/evaluation_metrics.json')
-
-    # Print summary
     print_metrics_summary(all_metrics, title="Final Model Evaluation")
 
     logger.info('Evaluation complete')
