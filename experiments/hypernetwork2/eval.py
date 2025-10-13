@@ -70,22 +70,28 @@ def compute_evaluation_metrics(
         d: int,
         N: int,
         device: torch.device,
-        rng: torch.Generator,
+        rng: torch.Generator = None,
         n_test_samples: int = 1000,
         n_test_distributions: int = 100,
+        test_bits: torch.Tensor = None,
+        test_params_list: list = None,
+        test_conditioning_params: torch.Tensor = None,
 ) -> Dict[str, float]:
     """
     Compute comprehensive evaluation metrics for the trained model.
 
     Args:
-        model: Trained HyperHyperNetwork
+        model: Trained model (HyperHyperNetwork or BenchmarkMPS)
         grid: Grid tensor [N]
         d: Dimensionality
         N: Grid size
         device: Device to run on
-        rng: Random generator
+        rng: Random generator (used only if test data not provided)
         n_test_samples: Number of sample points per distribution
         n_test_distributions: Number of different distributions to test
+        test_bits: Optional pre-generated test bits [n_test_distributions, n_test_samples, K]
+        test_params_list: Optional pre-generated parameter list
+        test_conditioning_params: Optional pre-generated conditioning params [n_test_distributions, conditioning_dim]
 
     Returns:
         Dictionary containing all metrics
@@ -97,6 +103,14 @@ def compute_evaluation_metrics(
 
     L = int(math.log2(N))
     K = d * L
+
+    # Determine if we're using pre-generated data or generating on the fly
+    using_fixed_data = (test_bits is not None and
+                        test_params_list is not None and
+                        test_conditioning_params is not None)
+
+    if not using_fixed_data and rng is None:
+        raise ValueError("Either provide test data or provide an rng for random generation")
 
     metrics = {
         'mse': [],
@@ -110,14 +124,19 @@ def compute_evaluation_metrics(
     }
 
     with torch.no_grad():
-        for _ in range(n_test_distributions):
-            # Sample random bits for evaluation
-            bits = torch.randint(0, 2, (1, n_test_samples, K), device=device, dtype=torch.long)
-            indices = bits_to_idx(bits, d, L)
-
-            # Generate conditioning parameters and targets
-            conditioning_params, params_list = sample_gaussian_params_batch(1, rng, d)
-            conditioning_params = conditioning_params.to(device, dtype=torch.float32)
+        for i in range(n_test_distributions):
+            if using_fixed_data:
+                # Use pre-generated test data
+                bits = test_bits[i:i+1]  # [1, n_test_samples, K]
+                indices = bits_to_idx(bits, d, L)
+                conditioning_params = test_conditioning_params[i:i+1]  # [1, conditioning_dim]
+                params_list = [test_params_list[i]]
+            else:
+                # Generate random data on the fly (old behavior)
+                bits = torch.randint(0, 2, (1, n_test_samples, K), device=device, dtype=torch.long)
+                indices = bits_to_idx(bits, d, L)
+                conditioning_params, params_list = sample_gaussian_params_batch(1, rng, d)
+                conditioning_params = conditioning_params.to(device, dtype=torch.float32)
 
             # Get predictions
             predictions = model.forward(conditioning_params, bits).squeeze(0)  # [n_test_samples]
@@ -378,4 +397,3 @@ def compare_models(
             logging.info(f'  {marker} {rank}. {model_name:30s}: {value:12.6f}')
 
     logging.info(f'\n{"="*80}\n')
-

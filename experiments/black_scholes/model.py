@@ -3,6 +3,8 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from qtt_functions import QTT
+
 
 class CrossAttentionBlock(nn.Module):
     def __init__(
@@ -31,7 +33,6 @@ class CrossAttentionBlock(nn.Module):
             nn.Linear(max(512, 4 * hidden_dim), hidden_dim),
         )
         self.drop2 = nn.Dropout(dropout)
-
 
     def forward(
             self,
@@ -127,14 +128,6 @@ class CoreBank(nn.Module):
         """
         r: max TT rank
         M: number of basis cores
-
-        Initialise basis cores with shape [M, 2, r, r]. M is the number of cores; 2 represents the two versions we're
-        learning, one when the input bit is 0 and the other when the input bit is 1; [r, r] is just the dimensions of
-        each basis core.
-
-        B is divided by (r ** 0.5) to increase numerical stability.
-
-        B: Basis cores
         """
         super().__init__()
         self.B = nn.Parameter(torch.randn(M, 2, r, r) / (r ** 0.5))  # [M, 2, r, r]
@@ -145,8 +138,7 @@ class CoreBank(nn.Module):
             alpha: torch.Tensor
     ):
         """
-        alpha: mixing weights for each core, alpha is flattened for simplicity and shape safety, could also do
-        '...m,mij->...ij' if not flattened. Shape [batch_size * k, M].
+        alpha: mixing weights for each core, shape [batch_size * k, M].
         """
         g0 = torch.einsum('bm,mij->bij', alpha, self.B[:, 0, :, :])
         g1 = torch.einsum('bm,mij->bij', alpha, self.B[:, 1, :, :])
@@ -184,10 +176,12 @@ class HyperHyperNetwork(nn.Module):
             conditioning_tokens: int,
     ):
         """
+        HyperHyperNetwork for Black-Scholes QTT approximation.
+
         N: grid size
         r: max TT rank
         M: number of basis cores
-        d: dimension
+        d: dimension (1 for 1D Black-Scholes)
         """
         super().__init__()
 
@@ -221,7 +215,38 @@ class HyperHyperNetwork(nn.Module):
         self.v = nn.Parameter(torch.ones(r) * scale)
         self.res_scale = nn.Parameter(torch.tensor(0.5))
 
-    def forward(
+    def forward(self, conditioning_params: torch.Tensor):
+        """
+        Returns the uncontracted QTT representation for the given batch of conditioning params.
+        Shapes:
+          - u: [B, r]
+          - cores: [B, K, 2, r, r]  (bit axis: 0 then 1)
+          - v: [B, r]
+        """
+        batch_size = conditioning_params.size(0)
+        alpha = self.sequence_model(conditioning_params, batch_size)             # [B, K, M]
+
+        # Build cores from bank
+        ak = alpha.reshape(batch_size * self.K, self.M)                          # [B*K, M]
+        g0, g1 = self.core_bank.make_core(ak)                                    # each [B*K, r, r]
+        g0 = g0.view(batch_size, self.K, self.r, self.r)                         # [B, K, r, r]
+        g1 = g1.view(batch_size, self.K, self.r, self.r)                         # [B, K, r, r]
+
+        # Residual identity (matches forward)
+        rs = F.softplus(self.res_scale)
+        I = torch.eye(self.r, device=g0.device, dtype=g0.dtype).view(1, 1, self.r, self.r)
+        g0 = g0 + rs * I
+        g1 = g1 + rs * I
+
+        # Stack bit dimension -> [B, K, 2, r, r]
+        cores = torch.stack([g0, g1], dim=2)
+
+        # Boundary vectors -> [B, r]
+        u = self.u.view(1, self.r).expand(batch_size, -1).contiguous()
+        v = self.v.view(1, self.r).expand(batch_size, -1).contiguous()
+        return u, cores, v
+
+    def contraction(
             self,
             conditioning_params: torch.Tensor,
             bits: torch.Tensor,
@@ -260,7 +285,6 @@ class HyperHyperNetwork(nn.Module):
             L = torch.matmul(L, Gk_sel)
 
         out = torch.matmul(L, self.v.view(1, 1, self.r, 1))
-
         return out.view(batch_size, S)  # [B, S]
 
     def orth_loss(self):

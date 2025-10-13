@@ -108,7 +108,7 @@ def train(
 
         conditioning_params, params_list = sample_gaussian_params_batch(batch_size, rng, d)
         conditioning_params = conditioning_params.to(device, dtype=torch.float32)
-        predictions = model.forward(conditioning_params, bits)  # [batch_size, S]
+        predictions = model.forward(conditioning_params, bits)
 
         targets = gaussian_analytical(indices, grid, params_list)
 
@@ -192,7 +192,7 @@ if __name__ == '__main__':
     # Model architecture
     parser.add_argument('--r', type=int, default=16)
     parser.add_argument('--hidden-size', type=int, default=256)
-    parser.add_argument('--num-layers', type=int, default=3)
+    parser.add_argument('--n-layers', type=int, default=3)
     parser.add_argument('--dropout', type=float, default=0.1)
     parser.add_argument('--decoder-type', type=str, default='dimension', choices=['core', 'dimension', 'shared'])
 
